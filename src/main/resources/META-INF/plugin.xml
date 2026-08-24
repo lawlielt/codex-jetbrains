@@ -1,0 +1,54 @@
+<idea-plugin>
+    <id>com.openai.codex.jetbrains</id>
+    <name>Codex</name>
+    <vendor url="https://openai.com/codex">OpenAI</vendor>
+
+    <description><![CDATA[
+      Native Codex coding-agent workflows for JetBrains IDEs, backed by the local
+      <code>codex app-server</code> process. Includes streaming conversations,
+      model and reasoning controls, explicit approvals, IDE diff review, editor
+      context, authentication, and actionable diagnostics.
+    ]]></description>
+
+    <idea-version since-build="242"/>
+    <depends>com.intellij.modules.platform</depends>
+    <depends optional="true" config-file="plugin-terminal.xml">org.jetbrains.plugins.terminal</depends>
+
+    <resource-bundle>messages.CodexBundle</resource-bundle>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Codex"
+                    anchor="right"
+                    icon="/icons/codex.svg"
+                    factoryClass="com.openai.codex.jetbrains.ui.CodexToolWindowFactory"/>
+        <applicationConfigurable id="com.openai.codex.jetbrains.settings"
+                                 displayName="Codex"
+                                 parentId="tools"
+                                 instance="com.openai.codex.jetbrains.settings.CodexSettingsConfigurable"/>
+        <notificationGroup id="Codex"
+                           displayType="BALLOON"
+                           isLogByDefault="true"/>
+    </extensions>
+
+    <actions>
+        <action id="com.openai.codex.jetbrains.FocusToolWindow"
+                class="com.openai.codex.jetbrains.actions.FocusCodexToolWindowAction"
+                text="Codex"
+                description="Focus the Codex coding-agent tool window"
+                icon="/icons/codex.svg">
+            <add-to-group group-id="MainToolbarRight" anchor="last"/>
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+
+        <action id="com.openai.codex.jetbrains.SendEditorContext"
+                class="com.openai.codex.jetbrains.actions.SendEditorContextAction"
+                text="Add Selection to Codex"
+                description="Stage the current file or selection as Codex context"
+                icon="/icons/codex.svg">
+            <keyboard-shortcut keymap="$default" first-keystroke="alt ctrl K"/>
+            <keyboard-shortcut keymap="Mac OS X" first-keystroke="alt meta K"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="Floating.CodeToolbar" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

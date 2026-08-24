@@ -1,0 +1,15 @@
+[versions]
+# IntelliJ Platform 2024.2 bundles Kotlin 1.9.24. Kotlin 2.2 compiles this
+# project with language/api level 1.9 so it remains binary compatible while
+# supporting the Gradle 9 line required by the current Platform Gradle plugin.
+kotlin = "2.2.20"
+intellij-platform-gradle = "2.18.1"
+intellij-platform-ide = "2024.2.6"
+junit = "4.13.2"
+
+[libraries]
+junit = { module = "junit:junit", version.ref = "junit" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+intellij-platform = { id = "org.jetbrains.intellij.platform", version.ref = "intellij-platform-gradle" }
