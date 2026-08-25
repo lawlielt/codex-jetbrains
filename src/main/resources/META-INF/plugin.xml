@@ -5,12 +5,14 @@
 
     <description><![CDATA[
       Launch the interactive Codex CLI in a dedicated JetBrains Terminal tab at
-      the current project root. Codex owns authentication, model selection,
+      the current project root, then stage project file and selection references
+      from the editor popup. Codex owns authentication, model selection,
       permissions, configuration, and session state in the terminal.
     ]]></description>
 
     <change-notes><![CDATA[
       <ul>
+        <li>0.3.0: Add Send to Codex for staging editor file and line references in a running Codex CLI terminal.</li>
         <li>0.2.1: Use the official Codex product mark and correct the plugin author metadata.</li>
         <li>0.2.0: Replace the app-server chat tool window with a terminal-first Codex CLI launcher.</li>
       </ul>
@@ -34,6 +36,14 @@
                 icon="/icons/codex.svg">
             <add-to-group group-id="MainToolbarRight" anchor="last"/>
             <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+        <action id="com.openai.codex.jetbrains.SendEditorReference"
+                class="com.openai.codex.jetbrains.actions.SendToCodexAction"
+                text="Send to Codex"
+                description="Stage the current file or selection in the running Codex CLI"
+                icon="/icons/codex.svg">
+            <keyboard-shortcut keymap="$default" first-keystroke="alt ctrl K"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </action>
     </actions>
 </idea-plugin>

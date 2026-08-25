@@ -16,6 +16,10 @@ class JetBrainsCodexTerminalLauncher(project: Project) : CodexTerminalLauncher, 
         controller.open(projectRoot)
     }
 
+    override fun hasLiveSession(projectRoot: Path): Boolean = controller.hasLiveSession(projectRoot)
+
+    override fun stage(projectRoot: Path, text: String): Boolean = controller.stage(projectRoot, text)
+
     override fun dispose() = Unit
 }
 
@@ -65,5 +69,13 @@ private class JetBrainsTerminalSession(
 
     override fun sendCommand(command: String) {
         widget.sendCommandToExecute(command)
+    }
+
+    override fun stageText(text: String): Boolean {
+        val connector = widget.ttyConnector?.takeIf { it.isConnected } ?: return false
+        return runCatching {
+            connector.write(text)
+            true
+        }.getOrDefault(false)
     }
 }

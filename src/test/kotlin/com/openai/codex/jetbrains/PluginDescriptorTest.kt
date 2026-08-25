@@ -1,8 +1,12 @@
 package com.openai.codex.jetbrains
 
+import com.intellij.openapi.actionSystem.KeyboardShortcut
+import com.intellij.openapi.keymap.KeymapUtil
+import com.intellij.openapi.keymap.impl.MacOSDefaultKeymap
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.awt.event.InputEvent
 
 class PluginDescriptorTest {
     private val pluginXml = resource("/META-INF/plugin.xml")
@@ -14,6 +18,32 @@ class PluginDescriptorTest {
         assertTrue(pluginXml.contains("group-id=\"MainToolbarRight\""))
         assertTrue(pluginXml.contains("group-id=\"ToolsMenu\""))
         assertTrue(pluginXml.contains("icon=\"/icons/codex.svg\""))
+    }
+
+    @Test
+    fun `registers Send to Codex in the editor popup with icon and shortcut`() {
+        assertTrue(pluginXml.contains("com.openai.codex.jetbrains.actions.SendToCodexAction"))
+        assertTrue(pluginXml.contains("id=\"com.openai.codex.jetbrains.SendEditorReference\""))
+        assertTrue(pluginXml.contains("text=\"Send to Codex\""))
+        assertTrue(pluginXml.contains("group-id=\"EditorPopupMenu\""))
+        assertTrue(pluginXml.contains("icon=\"/icons/codex.svg\""))
+        assertTrue(pluginXml.contains("keymap=\"\$default\" first-keystroke=\"alt ctrl K\""))
+    }
+
+    @Test
+    fun `default shortcut becomes Option Command K on the macOS keymap`() {
+        val defaultKeyStroke = requireNotNull(KeymapUtil.getKeyStroke("alt ctrl K"))
+        assertTrue(defaultKeyStroke.modifiers and InputEvent.ALT_DOWN_MASK != 0)
+        assertTrue(defaultKeyStroke.modifiers and InputEvent.CTRL_DOWN_MASK != 0)
+        assertFalse(defaultKeyStroke.modifiers and InputEvent.META_DOWN_MASK != 0)
+
+        val macShortcut = MacOSDefaultKeymap.convertShortcutFromParent(
+            KeyboardShortcut(defaultKeyStroke, null),
+        ) as KeyboardShortcut
+        val macKeyStroke = macShortcut.firstKeyStroke
+        assertTrue(macKeyStroke.modifiers and InputEvent.ALT_DOWN_MASK != 0)
+        assertTrue(macKeyStroke.modifiers and InputEvent.META_DOWN_MASK != 0)
+        assertFalse(macKeyStroke.modifiers and InputEvent.CTRL_DOWN_MASK != 0)
     }
 
     @Test

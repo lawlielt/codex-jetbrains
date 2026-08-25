@@ -1,7 +1,9 @@
 package com.openai.codex.jetbrains.terminal
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.file.Path
 
@@ -75,6 +77,79 @@ class CodexTerminalControllerTest {
         assertEquals(2, session.focusCount)
     }
 
+    @Test
+    fun `reports and stages only into the matching live Codex session`() {
+        controller.open(Path.of("project"))
+        val session = factory.created.single().session
+        session.state = TerminalCommandState.RUNNING
+
+        assertTrue(controller.hasLiveSession(Path.of("project", ".")))
+        assertFalse(controller.hasLiveSession(Path.of("other-project")))
+        assertTrue(controller.stage(Path.of("project"), "@src/Main.kt#L4-8 "))
+
+        assertEquals(1, factory.created.size)
+        assertEquals(listOf("codex"), session.commands)
+        assertEquals(listOf("@src/Main.kt#L4-8 "), session.stagedText)
+        assertEquals(2, session.focusCount)
+    }
+
+    @Test
+    fun `never creates or stages when Codex is not known to be running`() {
+        assertFalse(controller.hasLiveSession(Path.of("project")))
+        assertFalse(controller.stage(Path.of("project"), "@README.md "))
+        assertEquals(0, factory.created.size)
+
+        controller.open(Path.of("project"))
+        val session = factory.created.single().session
+
+        session.state = TerminalCommandState.IDLE
+        assertFalse(controller.hasLiveSession(Path.of("project")))
+        assertFalse(controller.stage(Path.of("project"), "@README.md "))
+
+        session.state = TerminalCommandState.UNKNOWN
+        assertFalse(controller.hasLiveSession(Path.of("project")))
+        assertFalse(controller.stage(Path.of("project"), "@README.md "))
+
+        session.state = TerminalCommandState.RUNNING
+        session.open = false
+        assertFalse(controller.hasLiveSession(Path.of("project")))
+        assertFalse(controller.stage(Path.of("project"), "@README.md "))
+
+        assertEquals(emptyList<String>(), session.stagedText)
+        assertEquals(1, session.focusCount)
+        assertEquals(1, factory.created.size)
+    }
+
+    @Test
+    fun `literal staging rejects empty text and line breaks without writing or submitting`() {
+        controller.open(Path.of("project"))
+        val session = factory.created.single().session
+        session.state = TerminalCommandState.RUNNING
+
+        assertFalse(controller.stage(Path.of("project"), ""))
+        assertFalse(controller.stage(Path.of("project"), "@README.md\n"))
+        assertFalse(controller.stage(Path.of("project"), "@README.md\r"))
+
+        assertEquals(listOf("codex"), session.commands)
+        assertEquals(emptyList<String>(), session.stagedText)
+        assertEquals(1, session.focusCount)
+    }
+
+    @Test
+    fun `literal staging fails safely when the terminal cannot accept input`() {
+        controller.open(Path.of("project"))
+        val session = factory.created.single().session
+        session.state = TerminalCommandState.RUNNING
+        session.acceptsStaging = false
+
+        assertFalse(controller.stage(Path.of("project"), "@README.md "))
+
+        assertEquals(listOf("@README.md "), session.stageAttempts)
+        assertEquals(emptyList<String>(), session.stagedText)
+        assertEquals(listOf("codex"), session.commands)
+        assertEquals(1, factory.created.size)
+    }
+
     /**
      * Regression boundary for the old `env node` exit-127 failure: these tests
      * expose only terminal creation and terminal command submission. There is
@@ -97,7 +172,10 @@ class CodexTerminalControllerTest {
         var open = true
         var state = TerminalCommandState.IDLE
         var focusCount = 0
+        var acceptsStaging = true
         val commands = mutableListOf<String>()
+        val stageAttempts = mutableListOf<String>()
+        val stagedText = mutableListOf<String>()
 
         override val isOpen: Boolean
             get() = open
@@ -110,6 +188,13 @@ class CodexTerminalControllerTest {
 
         override fun sendCommand(command: String) {
             commands += command
+        }
+
+        override fun stageText(text: String): Boolean {
+            stageAttempts += text
+            if (!acceptsStaging) return false
+            stagedText += text
+            return true
         }
     }
 

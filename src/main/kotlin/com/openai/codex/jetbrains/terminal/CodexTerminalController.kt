@@ -5,6 +5,10 @@ import java.util.concurrent.TimeUnit
 
 interface CodexTerminalLauncher {
     fun open(projectRoot: Path)
+
+    fun hasLiveSession(projectRoot: Path): Boolean
+
+    fun stage(projectRoot: Path, text: String): Boolean
 }
 
 internal fun interface CodexTerminalSessionFactory {
@@ -19,6 +23,8 @@ internal interface CodexTerminalSession {
     fun commandState(): TerminalCommandState
 
     fun sendCommand(command: String)
+
+    fun stageText(text: String): Boolean
 }
 
 internal enum class TerminalCommandState {
@@ -51,6 +57,30 @@ internal class CodexTerminalController(
 
         record.session.focus()
         if (shouldSubmit(record)) submit(record)
+    }
+
+    @Synchronized
+    fun hasLiveSession(projectRoot: Path): Boolean = liveSession(projectRoot) != null
+
+    /**
+     * Focuses the existing running Codex session and writes literal composer text.
+     * This path never creates a terminal and rejects line breaks defensively.
+     */
+    @Synchronized
+    fun stage(projectRoot: Path, text: String): Boolean {
+        if (text.isEmpty() || text.any { it == '\n' || it == '\r' }) return false
+        val session = liveSession(projectRoot) ?: return false
+
+        session.focus()
+        return session.stageText(text)
+    }
+
+    private fun liveSession(projectRoot: Path): CodexTerminalSession? {
+        val normalizedRoot = projectRoot.toAbsolutePath().normalize()
+        return current
+            ?.takeIf { it.projectRoot == normalizedRoot }
+            ?.session
+            ?.takeIf { it.isOpen && it.commandState() == TerminalCommandState.RUNNING }
     }
 
     private fun shouldSubmit(record: SessionRecord): Boolean {
