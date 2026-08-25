@@ -3,9 +3,9 @@
 This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
 
 - Use JDK 21 and the checked-in wrapper. The main local gates are `./gradlew test buildPlugin verifyPlugin`; dependency and target-IDE versions live in `gradle/libs.versions.toml`.
-- App-server transport and protocol logic belongs under `src/main/kotlin/com/openai/codex/jetbrains/protocol`; keep it independent of tool-window UI and cover stable wire behavior with focused unit tests.
-- `CodexProjectService` is the one-process-per-project lifecycle/persistence boundary. Never persist or log API keys, and keep approval responses scoped by request/thread/turn/item.
-- The supported baseline is IntelliJ Platform build 242. Prefer stable public Platform APIs and keep the Terminal integration optional.
+- The product boundary is a launcher for the interactive CLI: submit plain `codex` inside a project-root JetBrains Terminal tab. Never add JVM executable discovery/validation, `ProcessBuilder`, `codex app-server`, credentials, or a plugin-owned chat/configuration UI.
+- `CodexTerminalController` is the project-scoped reuse/test seam; the JetBrains adapter is loaded only by `META-INF/plugin-terminal.xml` so the main action can report a missing Terminal plugin without linking Terminal classes.
+- The supported baseline is IntelliJ Platform build 242. Prefer stable public Platform APIs, keep Terminal optional, and preserve focused tests for exact command submission and duplicate-session prevention.
 
 ## Maintaining this file
 
