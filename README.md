@@ -2,6 +2,8 @@
 
 Codex for JetBrains is a small launcher for the real interactive Codex CLI. Click the Codex toolbar icon and the plugin opens or focuses a project-scoped `Codex` tab in JetBrains' built-in Terminal, starts it at the current project root, and submits the plain `codex` command.
 
+Author/vendor: **lawlielt** · [lowlielt.liu@gmail.com](mailto:lowlielt.liu@gmail.com)
+
 Authentication, model and reasoning selection, permissions, configuration, session state, and every interactive prompt remain inside the Codex CLI. The plugin has no chat tool window, executable-path setting, login UI, credential handling, approval UI, or app-server process.
 
 ## Requirements
@@ -51,4 +53,6 @@ For a sandbox check, open a project in `runIde`, click the toolbar action, and c
 - `terminal/CodexTerminalController.kt` owns project-scoped reuse and the exact command boundary without depending on Terminal APIs.
 - `terminal/JetBrainsCodexTerminalLauncher.kt` is loaded only through `plugin-terminal.xml` and uses the user's configured JetBrains shell.
 
-The captain's screenshots and the installed reference plugin's public manifest were used only to confirm observable toolbar-to-Terminal behavior. No Anthropic code, text, icons, identifiers, bytecode, branding, or assets are included or copied. The Codex icon and all implementation code in this repository are original.
+The captain's screenshots and the installed reference plugin's public manifest were used only to confirm observable toolbar-to-Terminal behavior. No Anthropic code, text, icons, identifiers, bytecode, branding, or assets are included or copied. All implementation code in this repository is original.
+
+The Codex mark is the exact SVG path from the `--startup-logo-mask` embedded at `/webview/index.html` in the locally installed OpenAI Codex application (`/Applications/ChatGPT.app`, bundle identifier `com.openai.codex`, version `26.818.41705`; source `app.asar` SHA-256 `7ab7808f570fac3839943c0c324eb46b3ed34bee2647c75fd2155b39509b361e`). The packaged SVGs change only canvas dimensions and neutral light/dark theme colors; the official path geometry is unchanged.

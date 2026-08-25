@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>com.openai.codex.jetbrains</id>
     <name>Codex</name>
-    <vendor url="https://openai.com/codex">OpenAI</vendor>
+    <vendor email="lowlielt.liu@gmail.com">lawlielt</vendor>
 
     <description><![CDATA[
       Launch the interactive Codex CLI in a dedicated JetBrains Terminal tab at
@@ -10,7 +10,10 @@
     ]]></description>
 
     <change-notes><![CDATA[
-      <ul><li>0.2.0: Replace the app-server chat tool window with a terminal-first Codex CLI launcher.</li></ul>
+      <ul>
+        <li>0.2.1: Use the official Codex product mark and correct the plugin author metadata.</li>
+        <li>0.2.0: Replace the app-server chat tool window with a terminal-first Codex CLI launcher.</li>
+      </ul>
     ]]></change-notes>
 
     <idea-version since-build="242"/>
