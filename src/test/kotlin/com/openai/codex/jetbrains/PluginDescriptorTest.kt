@@ -13,6 +13,13 @@ class PluginDescriptorTest {
     private val terminalXml = resource("/META-INF/plugin-terminal.xml")
 
     @Test
+    fun `uses a unique Marketplace name and publisher-owned plugin ID`() {
+        assertTrue(pluginXml.contains("<name>Codex CLI Companion</name>"))
+        assertTrue(pluginXml.contains("<id>io.github.lawlielt.codex.jetbrains</id>"))
+        assertFalse(pluginXml.contains("<id>com.openai.codex.jetbrains</id>"))
+    }
+
+    @Test
     fun `registers the Codex launcher in toolbar and menu`() {
         assertTrue(pluginXml.contains("com.openai.codex.jetbrains.actions.OpenCodexTerminalAction"))
         assertTrue(pluginXml.contains("group-id=\"MainToolbarRight\""))

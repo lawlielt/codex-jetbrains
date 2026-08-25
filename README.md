@@ -1,8 +1,8 @@
-# Codex for JetBrains
+# Codex CLI Companion for JetBrains
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-Codex for JetBrains is an unofficial, community-maintained companion for the real interactive Codex CLI. Click the Codex toolbar icon and the plugin opens or focuses a project-scoped `Codex` tab in JetBrains' built-in Terminal, starts it at the current project root, and submits the plain `codex` command. From an editor, **Send to Codex** stages the current file or selected lines in that running CLI composer without submitting the turn.
+Codex CLI Companion for JetBrains is an unofficial, community-maintained companion for the real interactive Codex CLI. Click the Codex toolbar icon and the plugin opens or focuses a project-scoped `Codex` tab in JetBrains' built-in Terminal, starts it at the current project root, and submits the plain `codex` command. From an editor, **Send to Codex** stages the current file or selected lines in that running CLI composer without submitting the turn.
 
 This project is not affiliated with or endorsed by OpenAI or JetBrains.
 

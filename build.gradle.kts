@@ -6,7 +6,7 @@ plugins {
     alias(libs.plugins.intellij.platform)
 }
 
-group = "com.openai.codex.jetbrains"
+group = "io.github.lawlielt.codex.jetbrains"
 version = providers.gradleProperty("pluginVersion").get()
 
 repositories {
@@ -45,7 +45,7 @@ intellijPlatform {
     buildSearchableOptions = true
 
     pluginConfiguration {
-        name = "Codex"
+        name = "Codex CLI Companion"
         version = project.version.toString()
 
         ideaVersion {

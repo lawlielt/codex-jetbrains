@@ -1,10 +1,10 @@
 <idea-plugin>
-    <id>com.openai.codex.jetbrains</id>
-    <name>Codex</name>
+    <id>io.github.lawlielt.codex.jetbrains</id>
+    <name>Codex CLI Companion</name>
     <vendor email="lowlielt.liu@gmail.com">lawlielt</vendor>
 
     <description><![CDATA[
-      Launch the interactive Codex CLI in a dedicated JetBrains Terminal tab at
+      Unofficial terminal-first companion that launches the interactive Codex CLI in a dedicated JetBrains Terminal tab at
       the current project root, then stage project file and selection references
       from the editor popup. Codex owns authentication, model selection,
       permissions, configuration, and session state in the terminal.
@@ -12,6 +12,7 @@
 
     <change-notes><![CDATA[
       <ul>
+        <li>0.3.1: Adopt the unique Codex CLI Companion Marketplace name and a publisher-owned plugin ID.</li>
         <li>0.3.0: Add Send to Codex for staging editor file and line references in a running Codex CLI terminal.</li>
         <li>0.2.1: Use the official Codex product mark and correct the plugin author metadata.</li>
         <li>0.2.0: Replace the app-server chat tool window with a terminal-first Codex CLI launcher.</li>
