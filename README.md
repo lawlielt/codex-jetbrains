@@ -1,6 +1,10 @@
 # Codex for JetBrains
 
-Codex for JetBrains is a small companion for the real interactive Codex CLI. Click the Codex toolbar icon and the plugin opens or focuses a project-scoped `Codex` tab in JetBrains' built-in Terminal, starts it at the current project root, and submits the plain `codex` command. From an editor, **Send to Codex** stages the current file or selected lines in that running CLI composer without submitting the turn.
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
+Codex for JetBrains is an unofficial, community-maintained companion for the real interactive Codex CLI. Click the Codex toolbar icon and the plugin opens or focuses a project-scoped `Codex` tab in JetBrains' built-in Terminal, starts it at the current project root, and submits the plain `codex` command. From an editor, **Send to Codex** stages the current file or selected lines in that running CLI composer without submitting the turn.
+
+This project is not affiliated with or endorsed by OpenAI or JetBrains.
 
 Author/vendor: **lawlielt** · [lowlielt.liu@gmail.com](mailto:lowlielt.liu@gmail.com)
 
@@ -53,6 +57,8 @@ Versions are centralized in [`gradle/libs.versions.toml`](gradle/libs.versions.t
 ./gradlew runIde
 ```
 
+`buildPlugin` writes the installable archive to `build/distributions/codex-jetbrains-<version>.zip`.
+
 For a sandbox check, open a project in `runIde`, click the toolbar action, and confirm that one interactive `Codex` tab opens at the project root and runs `codex` once. Select editor lines and invoke **Send to Codex** to confirm the reference appears in the composer without submitting; clear the selection and repeat to confirm a file-only reference. Exit Codex and confirm **Send to Codex** disappears from the editor popup; click the toolbar action to confirm tab reuse and CLI relaunch, then close the terminal tab and click again to confirm recreation.
 
 ## Architecture and clean-room policy
@@ -65,3 +71,13 @@ For a sandbox check, open a project in `runIde`, click the toolbar action, and c
 The captain's screenshots and the installed reference plugin were used only to confirm observable editor-to-Terminal behavior and applicable Platform APIs. No Anthropic code, text, icons, identifiers, bytecode, branding, or assets are included or copied. All implementation code in this repository is original.
 
 The Codex mark is the exact SVG path from the `--startup-logo-mask` embedded at `/webview/index.html` in the locally installed OpenAI Codex application (`/Applications/ChatGPT.app`, bundle identifier `com.openai.codex`, version `26.818.41705`; source `app.asar` SHA-256 `7ab7808f570fac3839943c0c324eb46b3ed34bee2647c75fd2155b39509b361e`). The packaged SVGs change only canvas dimensions and neutral light/dark theme colors; the official path geometry is unchanged.
+
+## Contributing
+
+Issues and pull requests are welcome. Keep changes within the terminal-first product boundary and run `./gradlew test buildPlugin verifyPlugin` with JDK 21 before submitting a pull request.
+
+## License
+
+Copyright 2026 lawlielt.
+
+Licensed under the [Apache License 2.0](LICENSE).
