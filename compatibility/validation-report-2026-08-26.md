@@ -44,6 +44,44 @@
   POSIX/PowerShell command construction. Windows live verification remains
   unperformed on this macOS host.
 
+## 0.4.5 editor-tab routing correction
+
+- **Initiating trigger:** a compatible Codex `openDiff` dynamic-tool call while
+  its originating project file is open in the IDE and the project-scoped Codex
+  terminal session is active.
+- **Placement/lifecycle masking condition:** 0.4.4 correctly validated and
+  correlated the dynamic tool, but `JetBrainsOpenDiffPresenter` put
+  `DiffManager.createRequestPanel` inside a modal `DialogWrapper`. That UI
+  looked native yet bypassed the editor-area lifecycle completely, so changing
+  a nearby `DiffManager` call could not create a tracked editor tab.
+- **User-visible symptom:** an accumulating generic/modal Diff page appeared
+  outside the normal source-tab lifecycle instead of a temporary `[Codex]
+  <filename>` tab alongside the source file.
+- **Earliest reference divergence:** the clean-room Claude path constructs a
+  `SimpleDiffRequestChain` and calls `DiffManagerEx.showDiffBuiltin`; 0.4.4
+  diverged earlier by choosing `DialogWrapper` before it ever built a chain.
+  Version 0.4.5 constructs the same category of request chain, preserves the
+  actual `VirtualFile` as read-only Original and an editable proposed document,
+  then calls build 242's public `DiffEditorTabFilesManager.showDiffFile` with
+  its exact `ChainDiffVirtualFile`. This is the editor-tab infrastructure that
+  `showDiffBuiltin` uses when its preference/registry conditions permit it,
+  but it cannot fall back to a dialog or frame.
+- **Small counterfactual:** against the pinned IC-242.26775.15 platform,
+  `javap` confirms public overloads for
+  `showDiffBuiltin(Project, DiffRequestChain, DiffDialogHints)`,
+  `ChainDiffVirtualFile`, and public `DiffEditorTabFilesManager.showDiffFile`.
+  The production code compiles against this build-242 surface.
+  `EditorTabDiffContractTest` disconfirms the old route by asserting the sole
+  presentation route is
+  `BUILTIN_EDITOR_TAB`, not a generic `DiffManager` panel/dialog route.
+  A disconfirming production check remains: any modal/dialog or generic
+  `showDiff` invocation on this openDiff path is a release failure.
+- Each review owns its request chain and observes only its matching
+  `ChainDiffVirtualFile`. Apply, Reject, and close close only that file; close
+  waits 600 ms so a transient editor reopen cannot race into rejection.
+  Completion is single-use, restores the originating source when available,
+  and session disposal rejects/cleans outstanding review surfaces.
+
 ## 0.4.1 launcher regression
 
 - The initiating trigger was clicking the Codex action, which submitted the
@@ -122,8 +160,8 @@ The final command was:
   test buildPlugin verifyPlugin
 ```
 
-It passed on JDK 21.0.2. The test report contains **66 tests** across **16 test
-suites**: 65 executed with zero failures/errors, and the opt-in real-CLI smoke
+It passed on JDK 21.0.2. The test report contains **69 tests** across **17 test
+suites**: 68 executed with zero failures/errors, and the opt-in real-CLI smoke
 was skipped in the ordinary hermetic run. The separate, paid dynamic gate is
 recorded above and did send only the minimum authorized model turn. Plugin Verifier
 1.409 reported **Compatible** against
@@ -132,8 +170,8 @@ recorded above and did send only the minimum authorized model turn. Plugin Verif
 
 | Field | Value |
 | --- | --- |
-| Artifact | `build/distributions/codex-jetbrains-0.4.4.zip` |
+| Artifact | `build/distributions/codex-jetbrains-0.4.5.zip` |
 | Plugin ID | `io.github.lawlielt.codex.jetbrains` |
 | Name | `Codex CLI Companion` |
-| Version | `0.4.4` |
-| SHA-256 | `ba41da574f77a3f14f64a88470916405b4a6b53432af29579f20c25db56ebb40` |
+| Version | `0.4.5` |
+| SHA-256 | `ac1d6065dde4d0e78622f455317968affceecd406cf6b39ce7f250a0bbe13f2a` |

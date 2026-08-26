@@ -191,6 +191,9 @@ internal sealed interface OpenDiffCompletion {
 internal fun interface OpenDiffPresenter {
     /** Close must complete as [OpenDiffCompletion.Reject]; the callback is single-use. */
     fun present(proposal: PreparedOpenDiff, complete: (OpenDiffCompletion) -> Unit)
+
+    /** Releases outstanding native review surfaces during project/session disposal. */
+    fun close() {}
 }
 
 internal fun interface OpenDiffWriter {
@@ -238,6 +241,7 @@ internal class OpenDiffCoordinator(
             closed = true
             active.values.toList().also { active.clear() }
         }
+        presenter.close()
         pending.forEach { it.respond(false, "IDE_DIFF_REJECTED: project session closed before review.") }
     }
 

@@ -14,6 +14,7 @@
 
     <change-notes><![CDATA[
       <ul>
+        <li>0.4.5: Open Codex source reviews as temporary native editor-area tabs, with editable Proposed content, exact-tab cleanup, and source focus restoration.</li>
         <li>0.4.4: Add the gated openDiff dynamic-tool bridge: source proposals use editable native diffs, reviewer-edited content is committed through JetBrains APIs, and the terminal retains ordinary approvals.</li>
         <li>0.4.3: Stream large Codex plugin-catalog frames through private disk-backed buffers so growing marketplace metadata cannot reset remote terminal sessions.</li>
         <li>0.4.2: Keep terminal command-state probes off IDE action threads and support fragmented WebSocket messages without resetting remote Codex sessions.</li>
