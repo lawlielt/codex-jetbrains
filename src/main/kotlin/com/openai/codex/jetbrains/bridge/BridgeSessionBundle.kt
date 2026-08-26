@@ -23,21 +23,13 @@ internal class BridgeSessionBundle private constructor(
     private val relayTokenFile: Path,
     private val appServerTokenFile: Path,
     private val relayFailureMarker: Path,
-    private val appServerPort: Int,
+    private val launchScriptFile: Path,
+    private val terminalCommand: String,
     private val relay: WebSocketRelay,
 ) : Disposable {
     private val disposed = AtomicBoolean(false)
 
-    fun launchCommand(): String = BridgeLaunchCommand.create(
-        BridgeLaunchSpec(
-            relayEndpoint = relay.endpoint,
-            appServerEndpoint = "ws://127.0.0.1:$appServerPort",
-            relayTokenFile = relayTokenFile,
-            appServerTokenFile = appServerTokenFile,
-            relayFailureMarker = relayFailureMarker,
-            stateDirectory = stateDirectory,
-        ),
-    )
+    fun launchCommand(): String = terminalCommand
 
     override fun dispose() {
         if (!disposed.compareAndSet(false, true)) return
@@ -45,6 +37,7 @@ internal class BridgeSessionBundle private constructor(
         runCatching { Files.deleteIfExists(relayTokenFile) }
         runCatching { Files.deleteIfExists(appServerTokenFile) }
         runCatching { Files.deleteIfExists(relayFailureMarker) }
+        runCatching { Files.deleteIfExists(launchScriptFile) }
         runCatching { Files.deleteIfExists(stateDirectory.resolve("app-server.log")) }
         runCatching { Files.deleteIfExists(stateDirectory.resolve("app-server.err")) }
         runCatching { Files.deleteIfExists(stateDirectory) }
@@ -76,7 +69,25 @@ internal class BridgeSessionBundle private constructor(
                 // remaining defensive cleanup path.
                 onClosed = {},
             )
-            val bundle = BridgeSessionBundle(state, relayToken, appServerToken, relayFailureMarker, appServerPort, relay)
+            val launch = BridgeLaunchCommand.install(
+                BridgeLaunchSpec(
+                    relayEndpoint = relay.endpoint,
+                    appServerEndpoint = "ws://127.0.0.1:$appServerPort",
+                    relayTokenFile = relayToken,
+                    appServerTokenFile = appServerToken,
+                    relayFailureMarker = relayFailureMarker,
+                    stateDirectory = state,
+                ),
+            )
+            val bundle = BridgeSessionBundle(
+                state,
+                relayToken,
+                appServerToken,
+                relayFailureMarker,
+                launch.scriptFile,
+                launch.terminalCommand,
+                relay,
+            )
             relay.start()
             return bundle
         }

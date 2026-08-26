@@ -38,6 +38,8 @@ Clicking the action again focuses the live project tab instead of launching anot
 
 If the Terminal plugin is unavailable, the action asks you to enable it. If the shell cannot resolve `codex`, install or configure the CLI in that same JetBrains Terminal environment and retry there. If the installed CLI does not expose the required app-server/remote capability, or supervised startup fails, the terminal prints one short non-blocking explanation and cleanly continues with normal literal `codex`; it never falls back to terminal-output parsing.
 
+The native bridge writes its launcher into the same private temporary directory as its capability-token files. The interactive Terminal receives only one quoted command that runs this isolated script, so shell options and multiline parsing never leak into the user's zsh/bash session. The script is removed together with its tokens and app-server logs when the session ends.
+
 ## Why the CLI launches inside Terminal
 
 Version 0.1 launched a configured absolute Codex script from the IDE JVM and started `codex app-server`. That made the plugin a second chat client and caused an environment-specific startup failure:

@@ -1,7 +1,10 @@
 package com.openai.codex.jetbrains.bridge
 
 import com.intellij.openapi.util.SystemInfo
+import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.PosixFilePermission
 
 internal data class BridgeLaunchSpec(
     val relayEndpoint: String,
@@ -12,14 +15,45 @@ internal data class BridgeLaunchSpec(
     val stateDirectory: Path,
 )
 
+internal data class BridgeLaunchArtifact(
+    val terminalCommand: String,
+    val scriptFile: Path,
+)
+
 /**
- * Produces a command for the user's configured Terminal shell. The command
- * capability-probes the installed CLI and runs literal `codex` on any failure.
- * Tokens are read from private files, never interpolated into the command.
+ * Installs an isolated launcher and returns the single command submitted to
+ * the user's configured Terminal shell. The launcher capability-probes the
+ * installed CLI and runs literal `codex` on any failure. Tokens are read from
+ * private files, never interpolated into the terminal command.
  */
 internal object BridgeLaunchCommand {
-    fun create(spec: BridgeLaunchSpec, windows: Boolean = SystemInfo.isWindows): String =
-        if (windows) powerShell(spec) else posix(spec)
+    fun install(spec: BridgeLaunchSpec, windows: Boolean = SystemInfo.isWindows): BridgeLaunchArtifact {
+        val scriptFile = spec.stateDirectory.resolve(if (windows) "launch.ps1" else "launch.sh")
+        Files.writeString(
+            scriptFile,
+            if (windows) powerShell(spec) else posix(spec),
+            StandardOpenOption.CREATE_NEW,
+            StandardOpenOption.WRITE,
+        )
+        if (!windows) {
+            runCatching {
+                Files.setPosixFilePermissions(
+                    scriptFile,
+                    setOf(
+                        PosixFilePermission.OWNER_READ,
+                        PosixFilePermission.OWNER_WRITE,
+                        PosixFilePermission.OWNER_EXECUTE,
+                    ),
+                )
+            }
+        }
+        val terminalCommand = if (windows) {
+            "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File ${windowsQuote(scriptFile.toString())}"
+        } else {
+            "/bin/sh ${quote(scriptFile.toString())}"
+        }
+        return BridgeLaunchArtifact(terminalCommand, scriptFile)
+    }
 
     internal fun posix(spec: BridgeLaunchSpec): String {
         val relay = quote(spec.relayEndpoint)
@@ -29,13 +63,15 @@ internal object BridgeLaunchCommand {
         val relayFailure = quote(spec.relayFailureMarker.toString())
         val state = quote(spec.stateDirectory.toString())
         val ready = quote(spec.appServerEndpoint.replaceFirst("ws://", "http://") + "/readyz")
-        return """set -u
+        return """#!/bin/sh
+set -u
 bridge_dir=$state
 server_pid=""
 cleanup() {
   if [ -n "${'$'}server_pid" ]; then kill "${'$'}server_pid" 2>/dev/null || true; wait "${'$'}server_pid" 2>/dev/null || true; fi
   rm -f $relayToken $appToken 2>/dev/null || true
   rm -f "${'$'}bridge_dir/app-server.log" 2>/dev/null || true
+  rm -f "${'$'}bridge_dir/launch.sh" 2>/dev/null || true
   rmdir "${'$'}bridge_dir" 2>/dev/null || true
 }
 fallback() {
@@ -45,13 +81,13 @@ fallback() {
   exec codex
 }
 trap cleanup EXIT INT TERM HUP
-if ! codex app-server --help 2>/dev/null | grep -q -- '--listen' || \\
-   ! codex app-server --help 2>/dev/null | grep -q -- '--ws-auth' || \\
-   ! codex app-server --help 2>/dev/null | grep -q -- '--ws-token-file' || \\
+if ! codex app-server --help 2>/dev/null | grep -q -- '--listen' || \
+   ! codex app-server --help 2>/dev/null | grep -q -- '--ws-auth' || \
+   ! codex app-server --help 2>/dev/null | grep -q -- '--ws-token-file' || \
    ! codex --help 2>/dev/null | grep -q -- '--remote-auth-token-env'; then
   fallback
 fi
-codex app-server --listen $appServer --ws-auth capability-token --ws-token-file $appToken \\
+codex app-server --listen $appServer --ws-auth capability-token --ws-token-file $appToken \
   >"${'$'}bridge_dir/app-server.log" 2>&1 &
 server_pid="${'$'}!"
 ready=false
@@ -68,7 +104,8 @@ codex --remote $relay --remote-auth-token-env CODEX_JETBRAINS_RELAY_TOKEN
 status="${'$'}?"
 unset CODEX_JETBRAINS_RELAY_TOKEN
 if [ -f $relayFailure ]; then fallback; fi
-exit "${'$'}status"""
+exit "${'$'}status"
+"""
     }
 
     internal fun powerShell(spec: BridgeLaunchSpec): String {
@@ -111,5 +148,7 @@ try {
 }"""
     }
 
-    private fun quote(value: String): String = "'${value.replace("'", "'\\\"'\\\"'")}'"
+    private fun quote(value: String): String = "'${value.replace("'", "'\"'\"'")}'"
+
+    private fun windowsQuote(value: String): String = "\"${value.replace("\"", "\"\"")}\""
 }

@@ -16,6 +16,22 @@
   cleanup shapes have deterministic tests; Windows live execution remains a
   manual verification item because this machine is macOS.
 
+## 0.4.1 launcher regression
+
+- The initiating trigger was clicking the Codex action, which submitted the
+  generated bridge launch text through `sendCommandToExecute`.
+- The earliest divergence from the passing Gate 2 launcher was that production
+  pasted a multiline program into the user's interactive shell. Its raw Kotlin
+  string emitted two backslashes at continuation points and omitted the final
+  quote in `exit "$status"`; `set -u` also changed the user's zsh options.
+- The visible result was zsh executing `\\` as a command, Oh My Zsh prompt
+  failures, and unfinished `if>` / `dquote>` parser states instead of Codex.
+- Version 0.4.1 writes the program to a mode-`0700` private file and submits one
+  quoted `/bin/sh <file>` command. The regression test executes that exact
+  command with deterministic fake `codex` and `curl` programs, proves the
+  remote path runs, proves cleanup removes the state directory, and would fail
+  on the original continuation and closing-quote defects.
+
 ## Build and package
 
 The final command was:
@@ -25,15 +41,15 @@ The final command was:
   test buildPlugin verifyPlugin
 ```
 
-It passed on JDK 21.0.2. The test report contains **45 tests** across **11 test
+It passed on JDK 21.0.2. The test report contains **46 tests** across **11 test
 suites**. Plugin Verifier 1.409 reported **Compatible** against
 `IC-242.26775.15`; the HTML report is
 `build/reports/pluginVerifier/IC-242.26775.15/report.html`.
 
 | Field | Value |
 | --- | --- |
-| Artifact | `build/distributions/codex-jetbrains-0.4.0.zip` |
+| Artifact | `build/distributions/codex-jetbrains-0.4.1.zip` |
 | Plugin ID | `io.github.lawlielt.codex.jetbrains` |
 | Name | `Codex CLI Companion` |
-| Version | `0.4.0` |
-| SHA-256 | `b032ba410d721bcb62f709790f0f49757c74d0b4255f6221a52b2f67d5fb3f2a` |
+| Version | `0.4.1` |
+| SHA-256 | `2f7deb4dc2a024e8ae84d90077fb5847be4b44b1c1de3ac4070fa6ce25b1ad05` |
