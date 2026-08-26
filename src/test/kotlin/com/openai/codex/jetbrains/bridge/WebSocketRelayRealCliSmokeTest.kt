@@ -21,8 +21,14 @@ class WebSocketRelayRealCliSmokeTest {
         assumeTrue(Files.isExecutable(Path.of("/usr/bin/script")))
 
         val state = Files.createTempDirectory("codex-relay-real-smoke-")
-        val project = Files.createDirectory(state.resolve("project"))
-        val codexHome = Files.createDirectory(state.resolve("codex-home"))
+        val ambient = System.getenv("CODEX_REAL_TRANSPORT_AMBIENT") == "1"
+        val project = if (ambient) {
+            System.getenv("CODEX_REAL_TRANSPORT_CWD")?.let(Path::of)?.toAbsolutePath()?.normalize()
+                ?: Path.of("").toAbsolutePath().normalize()
+        } else {
+            Files.createDirectory(state.resolve("project"))
+        }
+        val codexHome = if (ambient) null else Files.createDirectory(state.resolve("codex-home"))
         val tokenFile = state.resolve("app-server.token")
         Files.writeString(tokenFile, "app-token")
         val appPort = freePort()
@@ -36,7 +42,7 @@ class WebSocketRelayRealCliSmokeTest {
             "--ws-token-file",
             tokenFile.toString(),
         ).directory(project.toFile()).redirectErrorStream(true).apply {
-            environment()["CODEX_HOME"] = codexHome.toString()
+            codexHome?.let { environment()["CODEX_HOME"] = it.toString() }
         }.start()
         var relay: WebSocketRelay? = null
         var tui: Process? = null
@@ -66,7 +72,7 @@ class WebSocketRelayRealCliSmokeTest {
                 "CODEX_JETBRAINS_RELAY_TOKEN",
                 "--no-alt-screen",
             ).directory(project.toFile()).redirectErrorStream(true).apply {
-                environment()["CODEX_HOME"] = codexHome.toString()
+                codexHome?.let { environment()["CODEX_HOME"] = it.toString() }
                 environment()["CODEX_JETBRAINS_RELAY_TOKEN"] = "remote-token"
             }.start()
 

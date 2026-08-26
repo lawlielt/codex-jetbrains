@@ -40,6 +40,8 @@ If the Terminal plugin is unavailable, the action asks you to enable it. If the 
 
 The native bridge writes its launcher into the same private temporary directory as its capability-token files. The interactive Terminal receives only one quoted command that runs this isolated script, so shell options and multiline parsing never leak into the user's zsh/bash session. The script is removed together with its tokens and app-server logs when the session ends.
 
+The relay keeps small WebSocket payloads in memory and spills larger payloads into short-lived files in that private directory. It scans only the top-level JSON-RPC method while streaming unrelated responses, so growing plugin-marketplace catalogs do not require a fixed in-memory frame limit. Only native file-approval messages are materialized for IDE handling; if one exceeds the native-preview budget, interception is disabled for that connection and the unchanged message returns to the normal terminal approval UI instead of resetting the session.
+
 ## Why the CLI launches inside Terminal
 
 Version 0.1 launched a configured absolute Codex script from the IDE JVM and started `codex app-server`. That made the plugin a second chat client and caused an environment-specific startup failure:
@@ -77,7 +79,7 @@ For a sandbox check, open a project in `runIde`, click the toolbar action, and c
 - `actions/SendToCodexAction.kt` and `actions/CodexEditorReference.kt` own editor-popup gating and project-relative reference formatting.
 - `terminal/CodexTerminalController.kt` owns project-scoped reuse and the exact command boundary without depending on Terminal APIs.
 - `terminal/JetBrainsCodexTerminalLauncher.kt` is loaded only through `plugin-terminal.xml` and uses the user's configured JetBrains shell.
-- `bridge/BridgeSessionBundle.kt` owns one short-lived relay/session bundle; `WebSocketRelay.kt` forwards the remote JSON-RPC stream except the correlated file-change approval.
+- `bridge/BridgeSessionBundle.kt` owns one short-lived relay/session bundle; `WebSocketRelay.kt` and `RelayPayload.kt` forward the remote JSON-RPC stream with disk-backed large-payload spooling except for correlated file-change approvals.
 - `bridge/FileChangeApprovalCoordinator.kt`, `FileChangeApproval.kt`, and `JetBrainsNativeDiffPresenter.kt` validate and display read-only proposals, then return only Codex's `accept`/`decline` decision.
 
 The captain's screenshots and the installed reference plugin were used only to confirm observable editor-to-Terminal behavior and applicable Platform APIs. No Anthropic code, text, icons, identifiers, bytecode, branding, or assets are included or copied. All implementation code in this repository is original.

@@ -67,7 +67,8 @@ internal class WebSocketRelay(
         client.soTimeout = 0
         val clientInput = BufferedInputStream(client.getInputStream())
         val clientOutput = BufferedOutputStream(client.getOutputStream())
-        val clientFrames = WebSocketFrames(clientInput, clientOutput)
+        val spoolDirectory = failureMarker.parent ?: Path.of(System.getProperty("java.io.tmpdir"))
+        val clientFrames = WebSocketFrames(clientInput, clientOutput, spoolDirectory)
         val clientRequest = HttpUpgrade.read(clientInput)
         if (!clientRequest.startLine.startsWith("GET ") || !constantTimeEquals(clientRequest.headers["authorization"], "Bearer $relayToken")) return
         val clientKey = clientRequest.headers["sec-websocket-key"] ?: return
@@ -78,7 +79,7 @@ internal class WebSocketRelay(
         synchronized(sockets) { sockets += upstream }
         val upstreamInput = BufferedInputStream(upstream.getInputStream())
         val upstreamOutput = BufferedOutputStream(upstream.getOutputStream())
-        val upstreamFrames = WebSocketFrames(upstreamInput, upstreamOutput)
+        val upstreamFrames = WebSocketFrames(upstreamInput, upstreamOutput, spoolDirectory)
         val upstreamKey = Base64.getEncoder().encodeToString(ByteArray(16).also(SecureRandom()::nextBytes))
         HttpUpgrade.request(upstreamOutput, appServerPort, upstreamKey, appServerToken)
         val upstreamResponse = HttpUpgrade.read(upstreamInput)
@@ -101,63 +102,101 @@ internal class WebSocketRelay(
     private fun pumpClient(client: WebSocketFrames, upstream: WebSocketFrames) {
         while (!closed.get()) {
             val frame = client.read() ?: throw EOFException("remote TUI closed without a WebSocket close frame")
-            when (frame.opcode) {
-                0x9 -> client.write(WebSocketFrame(true, 0xA, frame.payload), masked = false)
-                0x8 -> {
-                    upstream.write(frame, masked = true)
-                    return
+            frame.use {
+                when (frame.opcode) {
+                    0x9 -> WebSocketFrame(true, 0xA, frame.payload.copy(125)).use { response ->
+                        client.write(response, masked = false)
+                    }
+                    0x8 -> {
+                        upstream.write(frame, masked = true)
+                        return
+                    }
+                    else -> upstream.write(frame, masked = true)
                 }
-                else -> upstream.write(frame, masked = true)
             }
         }
     }
 
     private fun pumpUpstream(upstream: WebSocketFrames, client: WebSocketFrames) {
-        val fragments = FragmentedMessage()
-        while (!closed.get()) {
-            val frame = upstream.read() ?: throw EOFException("app-server closed without a WebSocket close frame")
-            when (frame.opcode) {
-                0x9 -> upstream.write(WebSocketFrame(true, 0xA, frame.payload), masked = true)
-                0x8 -> {
-                    client.write(frame, masked = false)
-                    return
+        val fragments = FragmentedMessage(upstream.spoolDirectory)
+        var nativeInterceptionEnabled = true
+        try {
+            while (!closed.get()) {
+                val frame = upstream.read() ?: throw EOFException("app-server closed without a WebSocket close frame")
+                when (frame.opcode) {
+                    0x9 -> frame.use {
+                        WebSocketFrame(true, 0xA, frame.payload.copy(125)).use { response ->
+                            upstream.write(response, masked = true)
+                        }
+                    }
+                    0x8 -> frame.use {
+                        client.write(frame, masked = false)
+                        return
+                    }
+                    0x0, 0x1, 0x2 -> fragments.accept(frame)?.use { message ->
+                        if (message.opcode == 0x1 && nativeInterceptionEnabled) {
+                            nativeInterceptionEnabled = handleUpstreamText(message, upstream, client)
+                        } else {
+                            client.write(message, masked = false)
+                        }
+                    }
+                    0xA -> frame.use { client.write(frame, masked = false) }
+                    else -> frame.close().also {
+                        throw WebSocketProtocolException("unsupported app-server WebSocket opcode")
+                    }
                 }
-                0x0, 0x1, 0x2 -> fragments.accept(frame)?.let { message ->
-                    if (message.opcode == 0x1) handleUpstreamText(message, upstream, client)
-                    else client.write(message, masked = false)
-                }
-                0xA -> client.write(frame, masked = false)
-                else -> throw WebSocketProtocolException("unsupported app-server WebSocket opcode")
             }
+        } finally {
+            fragments.close()
         }
     }
 
-    private fun handleUpstreamText(frame: WebSocketFrame, upstream: WebSocketFrames, client: WebSocketFrames) {
-        val message = runCatching { Json.parseToJsonElement(frame.payload.decodeToString()) as? JsonObject }.getOrNull()
-        if (message == null) {
+    /** Returns whether native interception remains safe for later messages. */
+    private fun handleUpstreamText(
+        frame: WebSocketFrame,
+        upstream: WebSocketFrames,
+        client: WebSocketFrames,
+    ): Boolean {
+        val method = JsonRpcMethodScanner.find(frame.payload)
+        if (method !in INTERCEPTED_METHODS) {
             client.write(frame, masked = false)
-            return
+            return true
+        }
+        val bytes = frame.payload.readBytes(MAX_INTERCEPTED_MESSAGE_BYTES)
+        val message = bytes?.let {
+            runCatching { Json.parseToJsonElement(it.decodeToString()) as? JsonObject }.getOrNull()
+        }
+        if (message == null) {
+            // Preserve the interactive CLI instead of disconnecting when a future
+            // approval payload grows beyond the IDE-native preview budget.
+            client.write(frame, masked = false)
+            return false
         }
         when ((message["method"] as? JsonPrimitive)?.contentOrNull) {
             "item/started" -> (message["params"] as? JsonObject)?.let(approvals::itemStarted)
             "item/completed" -> (message["params"] as? JsonObject)?.let(approvals::itemCompleted)
             "item/fileChange/requestApproval" -> {
-                val id = message["id"] ?: return
+                val id = message["id"] ?: return true
                 val params = message["params"] as? JsonObject
                 if (params == null) {
                     answer(upstream, id, ApprovalDecision.DECLINE)
                 } else {
                     approvals.approvalRequested(id, params) { decision -> answer(upstream, id, decision) }
                 }
-                return
+                return true
             }
         }
         client.write(frame, masked = false)
+        return true
     }
 
     private fun answer(upstream: WebSocketFrames, id: kotlinx.serialization.json.JsonElement, decision: ApprovalDecision) {
         val response = approvalResponse(id, decision)
-        runCatching { upstream.write(WebSocketFrame(true, 0x1, response.toString().encodeToByteArray()), masked = true) }
+        runCatching {
+            WebSocketFrame(true, 0x1, MemoryRelayPayload(response.toString().encodeToByteArray())).use {
+                upstream.write(it, masked = true)
+            }
+        }
     }
 
     override fun close() {
@@ -190,18 +229,24 @@ internal class WebSocketRelay(
         runCatching { Files.writeString(failureMarker, "native approval relay failed\n") }
     }
 
-    private data class WebSocketFrame(val fin: Boolean, val opcode: Int, val payload: ByteArray)
+    private data class WebSocketFrame(
+        val fin: Boolean,
+        val opcode: Int,
+        val payload: RelayPayload,
+    ) : AutoCloseable {
+        override fun close() = payload.close()
+    }
 
-    private class FragmentedMessage {
+    private class FragmentedMessage(private val spoolDirectory: Path) : AutoCloseable {
         private var opcode: Int? = null
-        private var payload: ByteArrayOutputStream? = null
+        private var payload: RelayPayloadSpool? = null
 
         fun accept(frame: WebSocketFrame): WebSocketFrame? {
             if (frame.opcode == 0x0) {
                 val messageOpcode = opcode ?: throw WebSocketProtocolException("unexpected continuation frame")
-                append(frame.payload)
+                appendAndClose(frame)
                 if (!frame.fin) return null
-                val complete = WebSocketFrame(true, messageOpcode, payload!!.toByteArray())
+                val complete = WebSocketFrame(true, messageOpcode, payload!!.finish())
                 opcode = null
                 payload = null
                 return complete
@@ -209,25 +254,32 @@ internal class WebSocketRelay(
             if (opcode != null) throw WebSocketProtocolException("new data frame before fragmented message completed")
             if (frame.fin) return frame
             opcode = frame.opcode
-            payload = ByteArrayOutputStream().also { it.write(frame.payload) }
+            payload = RelayPayloadSpool(spoolDirectory)
+            appendAndClose(frame)
             return null
         }
 
-        private fun append(bytes: ByteArray) {
-            val output = payload ?: throw WebSocketProtocolException("missing fragmented message buffer")
-            if (output.size().toLong() + bytes.size > MAX_MESSAGE_BYTES) {
-                throw WebSocketProtocolException("fragmented WebSocket message exceeds limit")
+        override fun close() {
+            payload?.close()
+            payload = null
+            opcode = null
+        }
+
+        private fun appendAndClose(frame: WebSocketFrame) {
+            frame.use {
+                val output = payload ?: throw WebSocketProtocolException("missing fragmented message buffer")
+                output.append(frame.payload)
             }
-            output.write(bytes)
         }
     }
 
     private class WebSocketProtocolException(message: String) : IllegalStateException(message)
 
-    /** Bounded RFC 6455 reader; unsupported extensions and oversized messages fail closed. */
+    /** Spool-backed RFC 6455 reader; payload size no longer determines JVM heap use. */
     private class WebSocketFrames(
         private val input: BufferedInputStream,
         private val output: BufferedOutputStream,
+        val spoolDirectory: Path,
     ) {
         private val writeLock = Any()
 
@@ -242,46 +294,74 @@ internal class WebSocketRelay(
             if (opcode !in setOf(0x0, 0x1, 0x2, 0x8, 0x9, 0xA)) {
                 throw WebSocketProtocolException("unsupported WebSocket opcode")
             }
-            var length = second and 0x7F
-            if (length == 126) length = readUnsignedShort()
-            if (length == 127) {
-                val longLength = readLong()
-                if (longLength !in 0..MAX_FRAME_BYTES.toLong()) {
-                    throw WebSocketProtocolException("WebSocket frame exceeds limit")
-                }
-                length = longLength.toInt()
+            val length = when (val shortLength = second and 0x7F) {
+                126 -> readUnsignedShort().toLong()
+                127 -> readLong()
+                else -> shortLength.toLong()
             }
-            if (length !in 0..MAX_FRAME_BYTES) throw WebSocketProtocolException("WebSocket frame exceeds limit")
+            if (length < 0) throw WebSocketProtocolException("invalid WebSocket frame length")
             if (opcode >= 0x8 && (!fin || length > 125)) {
                 throw WebSocketProtocolException("invalid WebSocket control frame")
             }
             val masked = second and 0x80 != 0
             val key = if (masked) readExact(4) else null
-            val payload = readExact(length)
-            if (key != null) payload.indices.forEach { payload[it] = (payload[it].toInt() xor key[it % 4].toInt()).toByte() }
-            return WebSocketFrame(fin, opcode, payload)
+            val spool = RelayPayloadSpool(spoolDirectory)
+            return try {
+                val buffer = ByteArray(STREAM_BUFFER_BYTES)
+                var remaining = length
+                var payloadOffset = 0L
+                while (remaining > 0) {
+                    val requested = minOf(remaining, buffer.size.toLong()).toInt()
+                    val count = input.read(buffer, 0, requested)
+                    if (count < 0) throw EOFException("closed WebSocket frame payload")
+                    if (key != null) {
+                        repeat(count) { index ->
+                            buffer[index] = (buffer[index].toInt() xor key[((payloadOffset + index) % 4).toInt()].toInt()).toByte()
+                        }
+                    }
+                    spool.write(buffer, 0, count)
+                    payloadOffset += count
+                    remaining -= count
+                }
+                WebSocketFrame(fin, opcode, spool.finish())
+            } catch (error: Exception) {
+                spool.close()
+                throw error
+            }
         }
 
         fun write(frame: WebSocketFrame, masked: Boolean) = synchronized(writeLock) {
             val payload = frame.payload
             output.write((if (frame.fin) 0x80 else 0) or frame.opcode)
             when {
-                payload.size < 126 -> output.write((if (masked) 0x80 else 0) or payload.size)
+                payload.size < 126 -> output.write((if (masked) 0x80 else 0) or payload.size.toInt())
                 payload.size <= 0xFFFF -> {
                     output.write((if (masked) 0x80 else 0) or 126)
-                    output.write(payload.size ushr 8)
-                    output.write(payload.size)
+                    output.write((payload.size ushr 8).toInt())
+                    output.write(payload.size.toInt())
                 }
                 else -> {
                     output.write((if (masked) 0x80 else 0) or 127)
-                    for (shift in 56 downTo 0 step 8) output.write((payload.size.toLong() ushr shift).toInt())
+                    for (shift in 56 downTo 0 step 8) output.write((payload.size ushr shift).toInt())
                 }
             }
-            if (masked) {
-                val key = ByteArray(4).also(SecureRandom()::nextBytes)
-                output.write(key)
-                output.write(ByteArray(payload.size) { index -> (payload[index].toInt() xor key[index % 4].toInt()).toByte() })
-            } else output.write(payload)
+            val key = if (masked) ByteArray(4).also(SecureRandom()::nextBytes).also(output::write) else null
+            payload.openStream().use { stream ->
+                val buffer = ByteArray(STREAM_BUFFER_BYTES)
+                var written = 0L
+                while (written < payload.size) {
+                    val requested = minOf(payload.size - written, buffer.size.toLong()).toInt()
+                    val count = stream.read(buffer, 0, requested)
+                    if (count < 0) throw EOFException("payload ended before its declared size")
+                    if (key != null) {
+                        repeat(count) { index ->
+                            buffer[index] = (buffer[index].toInt() xor key[((written + index) % 4).toInt()].toInt()).toByte()
+                        }
+                    }
+                    output.write(buffer, 0, count)
+                    written += count
+                }
+            }
             output.flush()
         }
 
@@ -292,10 +372,15 @@ internal class WebSocketRelay(
             return (high shl 8) or low
         }
 
-        private fun readLong(): Long = (0 until 8).fold(0L) { value, _ ->
-            val next = input.read()
-            if (next < 0) throw EOFException("closed extended WebSocket frame length")
-            (value shl 8) or next.toLong()
+        private fun readLong(): Long {
+            val first = input.read()
+            if (first < 0) throw EOFException("closed extended WebSocket frame length")
+            if (first and 0x80 != 0) throw WebSocketProtocolException("invalid WebSocket frame length")
+            return (1 until 8).fold(first.toLong()) { value, _ ->
+                val next = input.read()
+                if (next < 0) throw EOFException("closed extended WebSocket frame length")
+                (value shl 8) or next.toLong()
+            }
         }
         private fun readExact(length: Int): ByteArray {
             val result = ByteArray(length)
@@ -353,8 +438,13 @@ internal class WebSocketRelay(
         const val CONNECT_TIMEOUT_MILLIS = 30_000
         const val CLOSE_HANDSHAKE_TIMEOUT_MILLIS = 1_000L
         const val MAX_HEADERS_BYTES = 32 * 1024
-        const val MAX_FRAME_BYTES = 4 * 1024 * 1024
-        const val MAX_MESSAGE_BYTES = 4L * 1024 * 1024
+        const val MAX_INTERCEPTED_MESSAGE_BYTES = 4 * 1024 * 1024
+        const val STREAM_BUFFER_BYTES = 64 * 1024
+        val INTERCEPTED_METHODS = setOf(
+            "item/started",
+            "item/completed",
+            "item/fileChange/requestApproval",
+        )
 
         fun acceptKey(key: String): String = Base64.getEncoder().encodeToString(
             MessageDigest.getInstance("SHA-1").digest("${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11".encodeToByteArray()),

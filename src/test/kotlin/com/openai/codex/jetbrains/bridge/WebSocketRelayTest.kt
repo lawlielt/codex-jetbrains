@@ -18,6 +18,132 @@ import java.util.concurrent.TimeUnit
 
 class WebSocketRelayTest {
     @Test
+    fun `falls back to terminal approvals instead of disconnecting on oversized native message`() {
+        ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { appServer ->
+            val upstreamDone = CountDownLatch(1)
+            val failures = mutableListOf<Throwable>()
+            val relayFailures = mutableListOf<Throwable>()
+            val prefix = """{"jsonrpc":"2.0","method":"item/started","params":{},"padding":""".encodeToByteArray()
+            val suffix = """"}""".encodeToByteArray()
+            val oversized = prefix + ByteArray(4 * 1024 * 1024 + 1 - prefix.size - suffix.size) { 'x'.code.toByte() } + suffix
+            val approval = """{"jsonrpc":"2.0","id":17,"method":"item/fileChange/requestApproval","params":{"itemId":"item"}}""".encodeToByteArray()
+            val appThread = Thread {
+                runCatching {
+                    appServer.accept().use { socket ->
+                        val request = readHeaders(socket.getInputStream())
+                        val key = request.headers.getValue("sec-websocket-key")
+                        socket.getOutputStream().write(upgradeResponse(key).encodeToByteArray())
+                        socket.getOutputStream().flush()
+                        writeFrame(socket.getOutputStream(), false, oversized)
+                        writeFrame(socket.getOutputStream(), false, approval)
+                        writeFrame(socket.getOutputStream(), false, byteArrayOf(), opcode = 0x8)
+                        assertEquals(0x8, readTestFrame(socket.getInputStream()).opcode)
+                    }
+                }.onFailure { failures += it }
+                upstreamDone.countDown()
+            }
+            appThread.start()
+
+            val marker = java.nio.file.Files.createTempDirectory("relay-oversized-native-test").resolve("relay-failed")
+            val relay = WebSocketRelay(
+                appServer.localPort,
+                "remote-token",
+                "app-token",
+                FileChangeApprovalCoordinator(
+                    FileChangeValidator(java.nio.file.Path.of("project"), object : FileSnapshotStore {
+                        override fun read(path: java.nio.file.Path): String? = null
+                        override fun hasUnsavedDocument(path: java.nio.file.Path): Boolean = false
+                    }),
+                    NativeDiffPresenter { _, complete -> complete(ApprovalDecision.DECLINE) },
+                ),
+                marker,
+                onClosed = {},
+                failureObserver = { relayFailures += it },
+            )
+            relay.start()
+            Socket("127.0.0.1", relay.endpoint.substringAfterLast(':').toInt()).use { remote ->
+                val key = Base64.getEncoder().encodeToString(ByteArray(16) { it.toByte() })
+                remote.getOutputStream().write(
+                    "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: $key\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer remote-token\r\n\r\n".encodeToByteArray(),
+                )
+                remote.getOutputStream().flush()
+                assertTrue(readHeaders(remote.getInputStream()).startLine.startsWith("HTTP/1.1 101"))
+                assertTrue(oversized.contentEquals(readFrame(remote.getInputStream())))
+                assertTrue(approval.contentEquals(readFrame(remote.getInputStream())))
+                assertEquals(0x8, readTestFrame(remote.getInputStream()).opcode)
+                writeFrame(remote.getOutputStream(), true, byteArrayOf(), opcode = 0x8)
+            }
+            assertTrue("fake app-server did not finish", upstreamDone.await(10, TimeUnit.SECONDS))
+            relay.close()
+            assertTrue(failures.isEmpty())
+            assertTrue(relayFailures.isEmpty())
+            assertTrue(java.nio.file.Files.notExists(marker))
+        }
+    }
+
+    @Test
+    fun `streams plugin catalog response larger than the legacy frame limit`() {
+        ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { appServer ->
+            val upstreamDone = CountDownLatch(1)
+            val failures = mutableListOf<Throwable>()
+            val relayFailures = mutableListOf<Throwable>()
+            val prefix = """{"jsonrpc":"2.0","id":"plugin-list","result":{"marketplaces":[{"plugins":[{"icon":""".encodeToByteArray()
+            val suffix = """"}]}],"nextCursor":null}}""".encodeToByteArray()
+            val payload = prefix + ByteArray(6_577_006 - prefix.size - suffix.size) { 'x'.code.toByte() } + suffix
+            val appThread = Thread {
+                runCatching {
+                    appServer.accept().use { socket ->
+                        val request = readHeaders(socket.getInputStream())
+                        val key = request.headers.getValue("sec-websocket-key")
+                        socket.getOutputStream().write(upgradeResponse(key).encodeToByteArray())
+                        socket.getOutputStream().flush()
+                        writeFrame(socket.getOutputStream(), false, payload)
+                        writeFrame(socket.getOutputStream(), false, byteArrayOf(), opcode = 0x8)
+                        assertEquals(0x8, readTestFrame(socket.getInputStream()).opcode)
+                    }
+                }.onFailure { failures += it }
+                upstreamDone.countDown()
+            }
+            appThread.start()
+
+            val root = java.nio.file.Path.of("project").toAbsolutePath().normalize()
+            val marker = java.nio.file.Files.createTempDirectory("relay-large-catalog-test").resolve("relay-failed")
+            val relay = WebSocketRelay(
+                appServer.localPort,
+                "remote-token",
+                "app-token",
+                FileChangeApprovalCoordinator(
+                    FileChangeValidator(root, object : FileSnapshotStore {
+                        override fun read(path: java.nio.file.Path): String? = null
+                        override fun hasUnsavedDocument(path: java.nio.file.Path): Boolean = false
+                    }),
+                    NativeDiffPresenter { _, complete -> complete(ApprovalDecision.DECLINE) },
+                ),
+                marker,
+                onClosed = {},
+                failureObserver = { relayFailures += it },
+            )
+            relay.start()
+            Socket("127.0.0.1", relay.endpoint.substringAfterLast(':').toInt()).use { remote ->
+                val key = Base64.getEncoder().encodeToString(ByteArray(16) { it.toByte() })
+                remote.getOutputStream().write(
+                    "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: $key\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer remote-token\r\n\r\n".encodeToByteArray(),
+                )
+                remote.getOutputStream().flush()
+                assertTrue(readHeaders(remote.getInputStream()).startLine.startsWith("HTTP/1.1 101"))
+                assertTrue(payload.contentEquals(readFrame(remote.getInputStream())))
+                assertEquals(0x8, readTestFrame(remote.getInputStream()).opcode)
+                writeFrame(remote.getOutputStream(), true, byteArrayOf(), opcode = 0x8)
+            }
+            assertTrue("fake app-server did not finish", upstreamDone.await(10, TimeUnit.SECONDS))
+            relay.close()
+            assertTrue(failures.isEmpty())
+            assertTrue(relayFailures.isEmpty())
+            assertTrue(java.nio.file.Files.notExists(marker))
+        }
+    }
+
+    @Test
     fun `relays ordinary approvals and answers correlated file approval on upstream connection`() {
         ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { appServer ->
             val upstreamDone = CountDownLatch(1)
@@ -215,10 +341,13 @@ class WebSocketRelayTest {
         val maskBit = if (masked) 0x80 else 0
         if (payload.size < 126) {
             output.write(maskBit or payload.size)
-        } else {
+        } else if (payload.size <= 0xFFFF) {
             output.write(maskBit or 126)
             output.write(payload.size ushr 8)
             output.write(payload.size)
+        } else {
+            output.write(maskBit or 127)
+            for (shift in 56 downTo 0 step 8) output.write((payload.size.toLong() ushr shift).toInt())
         }
         if (masked) {
             val key = byteArrayOf(1, 2, 3, 4)
@@ -237,10 +366,13 @@ class WebSocketRelayTest {
         check(first >= 0)
         val lengthFlag = input.read()
         val masked = lengthFlag and 0x80 != 0
-        val length = when (val shortLength = lengthFlag and 0x7F) {
-            126 -> (input.read() shl 8) or input.read()
-            else -> shortLength
+        val longLength = when (val shortLength = lengthFlag and 0x7F) {
+            126 -> ((input.read() shl 8) or input.read()).toLong()
+            127 -> (0 until 8).fold(0L) { value, _ -> (value shl 8) or input.read().toLong() }
+            else -> shortLength.toLong()
         }
+        check(longLength <= Int.MAX_VALUE)
+        val length = longLength.toInt()
         val key = if (masked) ByteArray(4).also { input.readNBytes(it, 0, 4) } else null
         val payload = ByteArray(length).also { bytes ->
             input.readNBytes(bytes, 0, length)
