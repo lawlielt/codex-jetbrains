@@ -1,5 +1,9 @@
 package com.openai.codex.jetbrains.bridge
 
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.decodeFromStream
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayInputStream
@@ -129,6 +133,16 @@ internal fun RelayPayload.readBytes(maxBytes: Int): ByteArray? {
 
 internal fun RelayPayload.copy(maxBytes: Int): RelayPayload =
     MemoryRelayPayload(checkNotNull(readBytes(maxBytes)) { "control frame payload exceeded its protocol limit" })
+
+/**
+ * Materializes only a message selected by its top-level method scanner. The
+ * transport has already streamed it to a private spool, so this does not add a
+ * second fixed message-size ceiling to dynamic-tool or initialization payloads.
+ */
+@OptIn(ExperimentalSerializationApi::class)
+internal fun RelayPayload.jsonObjectOrNull(): JsonObject? = runCatching {
+    openStream().use { Json.decodeFromStream<JsonObject>(it) }
+}.getOrNull()
 
 /**
  * Reads only the top-level JSON-RPC `method` string. Other values are skipped

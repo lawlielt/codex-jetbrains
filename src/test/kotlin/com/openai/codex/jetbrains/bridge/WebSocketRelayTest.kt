@@ -1,6 +1,7 @@
 package com.openai.codex.jetbrains.bridge
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -17,6 +18,90 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class WebSocketRelayTest {
+    @Test
+    fun `injects openDiff and correlates its dynamic result without consuming ordinary approvals`() {
+        ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { appServer ->
+            val upstreamDone = CountDownLatch(1)
+            val failures = mutableListOf<Throwable>()
+            val root = java.nio.file.Files.createTempDirectory("relay-open-diff")
+            val source = root.resolve("source.txt")
+            java.nio.file.Files.writeString(source, "before\n")
+            val appThread = Thread {
+                runCatching {
+                    appServer.accept().use { socket ->
+                        val request = readHeaders(socket.getInputStream())
+                        val key = request.headers.getValue("sec-websocket-key")
+                        socket.getOutputStream().write(upgradeResponse(key).encodeToByteArray())
+                        socket.getOutputStream().flush()
+                        val initialize = Json.parseToJsonElement(readFrame(socket.getInputStream()).decodeToString()).jsonObject
+                        assertEquals("true", initialize["params"]?.jsonObject?.get("capabilities")?.jsonObject?.get("experimentalApi")?.jsonPrimitive?.content)
+                        val start = Json.parseToJsonElement(readFrame(socket.getInputStream()).decodeToString()).jsonObject
+                        assertEquals("openDiff", start["params"]?.jsonObject?.get("dynamicTools")?.jsonArray?.single()?.jsonObject?.get("name")?.jsonPrimitive?.content)
+                        val ordinaryClientMessage = readFrame(socket.getInputStream())
+                        assertTrue(ordinaryClientMessage.contentEquals("""{"jsonrpc":"2.0","method":"model/list","params":{}}""".encodeToByteArray()))
+                        writeFrame(socket.getOutputStream(), false, """{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread","turnId":"turn","item":{"id":"dynamic-item","type":"dynamicToolCall","tool":"openDiff","arguments":{}}}}""".encodeToByteArray())
+                        writeFrame(socket.getOutputStream(), false, """{"jsonrpc":"2.0","id":"tool-request","method":"item/tool/call","params":{"callId":"call","threadId":"thread","turnId":"turn","tool":"openDiff","arguments":{"operation":"update","oldPath":"source.txt","newPath":"source.txt","content":"proposed\n","preimage":"before\n"}}}""".encodeToByteArray())
+                        val dynamicResponse = Json.parseToJsonElement(readFrame(socket.getInputStream()).decodeToString()).jsonObject
+                        assertEquals("tool-request", dynamicResponse["id"]?.jsonPrimitive?.content)
+                        assertEquals("true", dynamicResponse["result"]?.jsonObject?.get("success")?.jsonPrimitive?.content)
+                        writeFrame(socket.getOutputStream(), false, """{"jsonrpc":"2.0","id":9,"method":"item/commandExecution/requestApproval","params":{"command":"pwd"}}""".encodeToByteArray())
+                        writeFrame(socket.getOutputStream(), false, byteArrayOf(), opcode = 0x8)
+                        assertEquals(0x8, readTestFrame(socket.getInputStream()).opcode)
+                    }
+                }.onFailure { failures += it }
+                upstreamDone.countDown()
+            }
+            appThread.start()
+
+            var committed: String? = null
+            val coordinator = OpenDiffCoordinator(
+                OpenDiffValidator(root, object : OpenDiffSnapshotStore {
+                    override fun read(path: java.nio.file.Path): String? = if (path == source) java.nio.file.Files.readString(path) else null
+                    override fun hasUnsavedDocument(path: java.nio.file.Path): Boolean = false
+                }),
+                OpenDiffPresenter { _, complete -> complete(OpenDiffCompletion.Apply("reviewer-edited\n")) },
+                OpenDiffWriter { _, content -> committed = content; true },
+            )
+            val relay = WebSocketRelay(
+                appServer.localPort,
+                "remote-token",
+                "app-token",
+                FileChangeApprovalCoordinator(
+                    FileChangeValidator(root, object : FileSnapshotStore {
+                        override fun read(path: java.nio.file.Path): String? = null
+                        override fun hasUnsavedDocument(path: java.nio.file.Path): Boolean = false
+                    }),
+                    NativeDiffPresenter { _, complete -> complete(ApprovalDecision.DECLINE) },
+                ),
+                java.nio.file.Files.createTempDirectory("relay-dynamic-test").resolve("relay-failed"),
+                onClosed = {},
+                openDiffs = coordinator,
+            )
+            relay.start()
+            Socket("127.0.0.1", relay.endpoint.substringAfterLast(':').toInt()).use { remote ->
+                val key = Base64.getEncoder().encodeToString(ByteArray(16) { it.toByte() })
+                remote.getOutputStream().write(
+                    "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: $key\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer remote-token\r\n\r\n".encodeToByteArray(),
+                )
+                remote.getOutputStream().flush()
+                assertTrue(readHeaders(remote.getInputStream()).startLine.startsWith("HTTP/1.1 101"))
+                writeFrame(remote.getOutputStream(), true, """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}""".encodeToByteArray())
+                writeFrame(remote.getOutputStream(), true, """{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"developerInstructions":"existing"}}""".encodeToByteArray())
+                writeFrame(remote.getOutputStream(), true, """{"jsonrpc":"2.0","method":"model/list","params":{}}""".encodeToByteArray())
+                val dynamicStarted = Json.parseToJsonElement(readFrame(remote.getInputStream()).decodeToString()).jsonObject
+                assertEquals("item/started", dynamicStarted["method"]?.jsonPrimitive?.content)
+                val forwardedApproval = Json.parseToJsonElement(readFrame(remote.getInputStream()).decodeToString()).jsonObject
+                assertEquals("item/commandExecution/requestApproval", forwardedApproval["method"]?.jsonPrimitive?.content)
+                assertEquals(0x8, readTestFrame(remote.getInputStream()).opcode)
+                writeFrame(remote.getOutputStream(), true, byteArrayOf(), opcode = 0x8)
+            }
+            assertTrue("fake app-server did not finish", upstreamDone.await(5, TimeUnit.SECONDS))
+            relay.close()
+            assertEquals("reviewer-edited\n", committed)
+            assertTrue(failures.isEmpty())
+        }
+    }
+
     @Test
     fun `falls back to terminal approvals instead of disconnecting on oversized native message`() {
         ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { appServer ->

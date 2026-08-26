@@ -54,15 +54,22 @@ internal class BridgeSessionBundle private constructor(
             restrict(state, setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE))
             restrict(relayToken, setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE))
             restrict(appServerToken, setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE))
-            val validator = FileChangeValidator(root, JetBrainsFileSnapshots())
+            val snapshots = JetBrainsFileSnapshots()
+            val validator = FileChangeValidator(root, snapshots)
             val presenter = JetBrainsNativeDiffPresenter(project)
             val coordinator = FileChangeApprovalCoordinator(validator, presenter)
+            val openDiffs = OpenDiffCoordinator(
+                OpenDiffValidator(root, snapshots),
+                JetBrainsOpenDiffPresenter(project),
+                JetBrainsOpenDiffWriter(project),
+            )
             val appServerPort = freePort()
             val relay = WebSocketRelay(
                 appServerPort = appServerPort,
                 relayToken = Files.readString(relayToken),
                 appServerToken = Files.readString(appServerToken),
                 approvals = coordinator,
+                openDiffs = openDiffs,
                 failureMarker = relayFailureMarker,
                 // The foreground shell consumes a pre-ready failure marker before
                 // its trap removes this directory. Project disposal owns the
@@ -104,7 +111,7 @@ internal class BridgeSessionBundle private constructor(
     }
 }
 
-private class JetBrainsFileSnapshots : FileSnapshotStore {
+private class JetBrainsFileSnapshots : FileSnapshotStore, OpenDiffSnapshotStore {
     override fun read(path: Path): String? = if (Files.isRegularFile(path)) Files.readString(path) else null
 
     override fun hasUnsavedDocument(path: Path): Boolean {

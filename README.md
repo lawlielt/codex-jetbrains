@@ -10,7 +10,7 @@ Author/vendor: **lawlielt** · [lowlielt.liu@gmail.com](mailto:lowlielt.liu@gmai
 
 Authentication, model and reasoning selection, permissions, configuration, session state, command approvals, network approvals, MCP approvals, and every normal interactive prompt remain inside the Codex CLI. The plugin has no chat tool window, executable-path setting, login UI, credential store, or manual hook/MCP setup.
 
-On compatible CLI/protocol builds, the same terminal tab transparently runs a shell-supervised local app-server connected through an authenticated loopback relay. Only `item/fileChange/requestApproval` is intercepted: Codex file proposals open a read-only JetBrains diff with **Apply** and **Reject**. Apply returns `accept` to the originating app-server request; Reject or closing the diff returns `decline`. Codex, not the plugin, writes accepted files and renders the authoritative result in the same TUI. All other approval types remain unchanged in the TUI.
+On compatible CLI/protocol builds, the same terminal tab transparently runs a shell-supervised local app-server connected through an authenticated loopback relay. The relay injects one session-scoped `openDiff` dynamic tool and developer instructions while keeping the Codex workspace sandbox read-only. Source changes therefore open an editable native JetBrains diff: **Apply** commits exactly the reviewer-edited right-hand content through JetBrains write APIs and returns a successful dynamic-tool result; **Reject** or closing the diff writes nothing and returns a structured rejection to the same Codex turn. The earlier correlated `item/fileChange/requestApproval` bridge remains a compatibility fallback. Command, network, MCP, permission, and unrelated dynamic-tool approvals remain unchanged in the terminal.
 
 ## Requirements
 
@@ -40,7 +40,7 @@ If the Terminal plugin is unavailable, the action asks you to enable it. If the 
 
 The native bridge writes its launcher into the same private temporary directory as its capability-token files. The interactive Terminal receives only one quoted command that runs this isolated script, so shell options and multiline parsing never leak into the user's zsh/bash session. The script is removed together with its tokens and app-server logs when the session ends.
 
-The relay keeps small WebSocket payloads in memory and spills larger payloads into short-lived files in that private directory. It scans only the top-level JSON-RPC method while streaming unrelated responses, so growing plugin-marketplace catalogs do not require a fixed in-memory frame limit. Only native file-approval messages are materialized for IDE handling; if one exceeds the native-preview budget, interception is disabled for that connection and the unchanged message returns to the normal terminal approval UI instead of resetting the session.
+The relay keeps small WebSocket payloads in memory and spills larger payloads into short-lived files in that private directory. It scans only the top-level JSON-RPC method while streaming unrelated responses, so growing plugin-marketplace catalogs and dynamic-tool payloads do not require a fixed in-memory frame limit. Only the selected native approval or `openDiff` message is materialized for IDE handling; an oversized legacy file-change preview returns unchanged to the normal terminal approval UI instead of resetting the session.
 
 ## Why the CLI launches inside Terminal
 
@@ -56,9 +56,9 @@ Version 0.1 launched a configured absolute Codex script from the IDE JVM and sta
 
 ## Native approval safety
 
-The relay binds only to loopback and authenticates both its remote-TUI and app-server WebSocket connections with short-lived capability tokens held in private temporary files. Secrets are not placed in command arguments or logs. The plugin correlates each approval with its `threadId`, `turnId`, `itemId`, and upstream request ID, then validates every unified-patch hunk against the current disk preimage before opening a diff.
+The relay binds only to loopback and authenticates both its remote-TUI and app-server WebSocket connections with short-lived capability tokens held in private temporary files. Secrets are not placed in command arguments or logs. For `openDiff`, it strictly validates the operation, project-relative paths, full preimage, and full proposed content before opening a diff; Apply re-checks staleness and unsaved documents before committing. Update, add, delete, and move requests are supported. The legacy fallback still correlates `threadId`, `turnId`, `itemId`, and upstream request ID before validating its unified patch.
 
-Paths must remain inside the project root. Unknown, malformed, stale, dirty-editor, conflicting, duplicate, late, or multi-file-partial requests fail closed with `decline`; a multi-file item is one atomic decision. The native preview reconstructs content only for read-only display and never writes a proposed file. Pending approvals decline on disconnect or project/plugin disposal; the shell trap reaps the app-server when the remote TUI exits.
+Paths must remain inside the project root and cannot escape through symlinks. Unknown, malformed, stale, dirty-editor, conflicting, duplicate, late, or disposed-project `openDiff` requests fail closed with a single structured rejection. Closing a native diff is Reject. Pending requests reject on disconnect or project/plugin disposal; the shell trap reaps the app-server when the remote TUI exits.
 
 ## Build, test, and run
 
@@ -79,8 +79,8 @@ For a sandbox check, open a project in `runIde`, click the toolbar action, and c
 - `actions/SendToCodexAction.kt` and `actions/CodexEditorReference.kt` own editor-popup gating and project-relative reference formatting.
 - `terminal/CodexTerminalController.kt` owns project-scoped reuse and the exact command boundary without depending on Terminal APIs.
 - `terminal/JetBrainsCodexTerminalLauncher.kt` is loaded only through `plugin-terminal.xml` and uses the user's configured JetBrains shell.
-- `bridge/BridgeSessionBundle.kt` owns one short-lived relay/session bundle; `WebSocketRelay.kt` and `RelayPayload.kt` forward the remote JSON-RPC stream with disk-backed large-payload spooling except for correlated file-change approvals.
-- `bridge/FileChangeApprovalCoordinator.kt`, `FileChangeApproval.kt`, and `JetBrainsNativeDiffPresenter.kt` validate and display read-only proposals, then return only Codex's `accept`/`decline` decision.
+- `bridge/BridgeSessionBundle.kt` owns one short-lived relay/session bundle; `WebSocketRelay.kt`, `OpenDiffInjection.kt`, and `RelayPayload.kt` inject and forward the remote JSON-RPC stream with disk-backed large-payload spooling.
+- `bridge/OpenDiffCoordinator.kt` and `JetBrainsOpenDiffPresenter.kt` validate, display, and commit dynamic-tool source proposals; `FileChangeApprovalCoordinator.kt` remains the read-only `fileChange` fallback.
 
 The captain's screenshots and the installed reference plugin were used only to confirm observable editor-to-Terminal behavior and applicable Platform APIs. No Anthropic code, text, icons, identifiers, bytecode, branding, or assets are included or copied. All implementation code in this repository is original.
 

@@ -15,6 +15,34 @@
   live remote TUI, and reaped both children. POSIX and PowerShell launcher and
   cleanup shapes have deterministic tests; Windows live execution remains a
   manual verification item because this machine is macOS.
+- The dynamic `openDiff` gate passed against local `codex-cli 0.149.1` on one
+  continuing remote-TUI thread and turn. The relay injected the experimental
+  capability, strict session tool, and merged developer instruction; a real
+  first call completed as `success: false` without a file write and the same
+  TUI rendered the rejection. A second real call wrote exactly the
+  reviewer-edited full content before `success: true`, after which the turn
+  completed. The read-only shell-write check did not mutate the disposable
+  project. Sanitized evidence is documented in `compatibility/README.md`.
+
+## 0.4.4 dynamic source-review bridge
+
+- Compatible sessions capability-probe the generated experimental app-server
+  schema before launch, then run remote Codex with `--sandbox read-only`.
+  `OpenDiffSessionInjection` adds only `experimentalApi`, `openDiff`, and the
+  appended source-edit instruction; unrelated JSON-RPC fields and approvals
+  remain on the terminal path.
+- `OpenDiffCoordinator` validates full preimages, project-relative paths, dirty
+  documents, path/symlink escape, operation semantics, duplicate/late replies,
+  and disposal before a native diff opens. The editable right document is read
+  only by Apply; `JetBrainsOpenDiffWriter` commits it inside a JetBrains write
+  command and responds to Codex only after the write returns. Reject and close
+  return one structured dynamic-tool failure with no write.
+- Deterministic coverage exercises schema/instruction injection, streamed
+  unrelated large frames, request/result correlation, update/add/delete/move,
+  stale and unsaved content, traversal/symlink escape, reviewer edits,
+  duplicate/late callbacks, disconnect/close rejection, launcher probing, and
+  POSIX/PowerShell command construction. Windows live verification remains
+  unperformed on this macOS host.
 
 ## 0.4.1 launcher regression
 
@@ -94,18 +122,18 @@ The final command was:
   test buildPlugin verifyPlugin
 ```
 
-It passed on JDK 21.0.2. The test report contains **52 tests** across **13 test
-suites**: 51 executed with zero failures/errors, and the opt-in real-CLI smoke
-was skipped in the ordinary hermetic run. That smoke passed separately with
-`CODEX_REAL_TRANSPORT_SMOKE=1` and did not send a model prompt. Plugin Verifier
+It passed on JDK 21.0.2. The test report contains **66 tests** across **16 test
+suites**: 65 executed with zero failures/errors, and the opt-in real-CLI smoke
+was skipped in the ordinary hermetic run. The separate, paid dynamic gate is
+recorded above and did send only the minimum authorized model turn. Plugin Verifier
 1.409 reported **Compatible** against
 `IC-242.26775.15`; the HTML report is
 `build/reports/pluginVerifier/IC-242.26775.15/report.html`.
 
 | Field | Value |
 | --- | --- |
-| Artifact | `build/distributions/codex-jetbrains-0.4.2.zip` |
+| Artifact | `build/distributions/codex-jetbrains-0.4.4.zip` |
 | Plugin ID | `io.github.lawlielt.codex.jetbrains` |
 | Name | `Codex CLI Companion` |
-| Version | `0.4.2` |
-| SHA-256 | `766dd37b534928e855a30c20a083f5e8aa2489e3b68c496fb290c09be66f92a1` |
+| Version | `0.4.4` |
+| SHA-256 | `ba41da574f77a3f14f64a88470916405b4a6b53432af29579f20c25db56ebb40` |

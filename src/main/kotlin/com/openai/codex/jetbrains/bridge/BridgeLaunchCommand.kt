@@ -71,6 +71,7 @@ cleanup() {
   if [ -n "${'$'}server_pid" ]; then kill "${'$'}server_pid" 2>/dev/null || true; wait "${'$'}server_pid" 2>/dev/null || true; fi
   rm -f $relayToken $appToken 2>/dev/null || true
   rm -f "${'$'}bridge_dir/app-server.log" 2>/dev/null || true
+  rm -rf "${'$'}bridge_dir/protocol-schema" 2>/dev/null || true
   rm -f "${'$'}bridge_dir/launch.sh" 2>/dev/null || true
   rmdir "${'$'}bridge_dir" 2>/dev/null || true
 }
@@ -87,6 +88,14 @@ if ! codex app-server --help 2>/dev/null | grep -q -- '--listen' || \
    ! codex --help 2>/dev/null | grep -q -- '--remote-auth-token-env'; then
   fallback
 fi
+schema_dir="${'$'}bridge_dir/protocol-schema"
+if ! codex app-server generate-json-schema --experimental --out "${'$'}schema_dir" >/dev/null 2>&1 || \
+   ! grep -R -q -- '"dynamicTools"' "${'$'}schema_dir" || \
+   ! grep -R -q -- '"experimentalApi"' "${'$'}schema_dir" || \
+   ! grep -R -q -- 'item/tool/call' "${'$'}schema_dir"; then
+  fallback
+fi
+rm -rf "${'$'}schema_dir" 2>/dev/null || true
 codex app-server --listen $appServer --ws-auth capability-token --ws-token-file $appToken \
   >"${'$'}bridge_dir/app-server.log" 2>&1 &
 server_pid="${'$'}!"
@@ -100,7 +109,7 @@ while [ "${'$'}attempt" -lt 100 ]; do
 done
 [ "${'$'}ready" = true ] || fallback
 export CODEX_JETBRAINS_RELAY_TOKEN="$(cat $relayToken)"
-codex --remote $relay --remote-auth-token-env CODEX_JETBRAINS_RELAY_TOKEN
+codex --remote $relay --remote-auth-token-env CODEX_JETBRAINS_RELAY_TOKEN --sandbox read-only
 status="${'$'}?"
 unset CODEX_JETBRAINS_RELAY_TOKEN
 if [ -f $relayFailure ]; then fallback; fi
@@ -129,6 +138,13 @@ try {
       -not ((codex app-server --help) -match '--ws-auth') -or
       -not ((codex app-server --help) -match '--ws-token-file') -or
       -not ((codex --help) -match '--remote-auth-token-env')) { Fallback }
+  ${'$'}schemaDir = Join-Path ${'$'}bridgeDir 'protocol-schema'
+  & codex app-server generate-json-schema --experimental --out ${'$'}schemaDir | Out-Null
+  if (${ '$' }LASTEXITCODE -ne 0 -or
+      -not (Select-String -Path (Join-Path ${'$'}schemaDir '*') -Pattern '"dynamicTools"' -Recurse -Quiet) -or
+      -not (Select-String -Path (Join-Path ${'$'}schemaDir '*') -Pattern '"experimentalApi"' -Recurse -Quiet) -or
+      -not (Select-String -Path (Join-Path ${'$'}schemaDir '*') -Pattern 'item/tool/call' -Recurse -Quiet)) { Fallback }
+  Remove-Item -LiteralPath ${'$'}schemaDir -Recurse -Force -ErrorAction SilentlyContinue
   ${'$'}server = Start-Process -FilePath codex -ArgumentList @('app-server', '--listen', $appServer, '--ws-auth', 'capability-token', '--ws-token-file', $appToken) -PassThru -RedirectStandardOutput "${'$'}bridgeDir\\app-server.log" -RedirectStandardError "${'$'}bridgeDir\\app-server.err"
   ${'$'}ready = ${'$'}false
   1..100 | ForEach-Object {
@@ -136,7 +152,7 @@ try {
   }
   if (-not ${'$'}ready -or ${'$'}server.HasExited) { Fallback }
   ${'$'}env:CODEX_JETBRAINS_RELAY_TOKEN = Get-Content -LiteralPath $relayToken -Raw
-  & codex --remote $relay --remote-auth-token-env CODEX_JETBRAINS_RELAY_TOKEN
+  & codex --remote $relay --remote-auth-token-env CODEX_JETBRAINS_RELAY_TOKEN --sandbox read-only
   ${'$'}remoteStatus = ${'$'}LASTEXITCODE
   if (Test-Path -LiteralPath $relayFailure) { Fallback }
   exit ${'$'}remoteStatus

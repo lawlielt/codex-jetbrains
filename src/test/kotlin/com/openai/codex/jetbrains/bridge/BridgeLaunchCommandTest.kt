@@ -33,7 +33,10 @@ class BridgeLaunchCommandTest {
             assertEquals("/bin/sh '${launch.scriptFile}'", launch.terminalCommand)
             assertTrue(script.startsWith("#!/bin/sh\nset -u\n"))
             assertTrue(script.contains("codex app-server --help"))
+            assertTrue(script.contains("generate-json-schema --experimental"))
+            assertTrue(script.contains("\"dynamicTools\"") && script.contains("item/tool/call"))
             assertTrue(script.contains("--remote-auth-token-env CODEX_JETBRAINS_RELAY_TOKEN"))
+            assertTrue(script.contains("--sandbox read-only"))
             assertTrue(script.contains("trap cleanup EXIT INT TERM HUP"))
             assertTrue(script.contains("kill \"${'$'}server_pid\"") && script.contains("wait \"${'$'}server_pid\""))
             assertTrue(script.contains("fallback") && script.contains("exec codex"))
@@ -62,6 +65,7 @@ class BridgeLaunchCommandTest {
             assertTrue(launch.terminalCommand.startsWith("powershell.exe -NoLogo -NoProfile"))
             assertTrue(launch.terminalCommand.endsWith("-File \"${launch.scriptFile}\""))
             assertTrue(script.contains("Start-Process -FilePath codex -ArgumentList @("))
+            assertTrue(script.contains("generate-json-schema --experimental"))
             assertTrue(script.contains("try {") && script.contains("} finally {"))
             assertTrue(script.contains("Stop-Process -Id ${'$'}server.Id -Force"))
             assertTrue(script.contains("Remove-Item Env:CODEX_JETBRAINS_RELAY_TOKEN"))
@@ -88,6 +92,11 @@ class BridgeLaunchCommandTest {
                 """#!/bin/sh
 if [ "${'$'}1" = "app-server" ] && [ "${'$'}2" = "--help" ]; then
   printf '%s\n' '--listen --ws-auth --ws-token-file'
+  exit 0
+fi
+if [ "${'$'}1" = "app-server" ] && [ "${'$'}2" = "generate-json-schema" ]; then
+  mkdir -p "${'$'}5"
+  printf '%s\n' '"dynamicTools" "experimentalApi" item/tool/call' >"${'$'}5/protocol.json"
   exit 0
 fi
 if [ "${'$'}1" = "--help" ]; then

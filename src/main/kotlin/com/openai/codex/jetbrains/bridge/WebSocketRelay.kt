@@ -1,7 +1,6 @@
 package com.openai.codex.jetbrains.bridge
 
 import com.intellij.openapi.diagnostic.Logger
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -36,6 +35,7 @@ internal class WebSocketRelay(
     private val failureMarker: Path,
     private val onClosed: () -> Unit,
     private val failureObserver: (Throwable) -> Unit = {},
+    private val openDiffs: OpenDiffCoordinator = disabledOpenDiffCoordinator(),
 ) : AutoCloseable {
     private val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
     private val closed = AtomicBoolean(false)
@@ -44,6 +44,7 @@ internal class WebSocketRelay(
     }
     private val sockets = mutableSetOf<Socket>()
     private val upstreamReady = AtomicBoolean(false)
+    private val dynamicInjection = OpenDiffSessionInjection()
 
     val endpoint: String = "ws://127.0.0.1:${server.localPort}"
 
@@ -100,19 +101,41 @@ internal class WebSocketRelay(
     }
 
     private fun pumpClient(client: WebSocketFrames, upstream: WebSocketFrames) {
-        while (!closed.get()) {
-            val frame = client.read() ?: throw EOFException("remote TUI closed without a WebSocket close frame")
-            frame.use {
+        val fragments = FragmentedMessage(client.spoolDirectory)
+        try {
+            while (!closed.get()) {
+                val frame = client.read() ?: throw EOFException("remote TUI closed without a WebSocket close frame")
                 when (frame.opcode) {
-                    0x9 -> WebSocketFrame(true, 0xA, frame.payload.copy(125)).use { response ->
-                        client.write(response, masked = false)
+                    0x9 -> frame.use {
+                        WebSocketFrame(true, 0xA, frame.payload.copy(125)).use { response ->
+                            client.write(response, masked = false)
+                        }
                     }
-                    0x8 -> {
+                    0x8 -> frame.use {
                         upstream.write(frame, masked = true)
                         return
                     }
-                    else -> upstream.write(frame, masked = true)
+                    0x0, 0x1, 0x2 -> fragments.accept(frame)?.use { message ->
+                        if (message.opcode == 0x1) handleClientText(message, upstream) else upstream.write(message, masked = true)
+                    }
+                    0xA -> frame.use { upstream.write(frame, masked = true) }
+                    else -> frame.close().also {
+                        throw WebSocketProtocolException("unsupported remote TUI WebSocket opcode")
+                    }
                 }
+            }
+        } finally {
+            fragments.close()
+        }
+    }
+
+    private fun handleClientText(frame: WebSocketFrame, upstream: WebSocketFrames) {
+        val rewritten = dynamicInjection.rewrite(frame.payload)
+        if (rewritten == null) {
+            upstream.write(frame, masked = true)
+        } else {
+            rewritten.use { replacement ->
+                WebSocketFrame(true, 0x1, replacement).use { upstream.write(it, masked = true) }
             }
         }
     }
@@ -162,15 +185,18 @@ internal class WebSocketRelay(
             client.write(frame, masked = false)
             return true
         }
-        val bytes = frame.payload.readBytes(MAX_INTERCEPTED_MESSAGE_BYTES)
-        val message = bytes?.let {
-            runCatching { Json.parseToJsonElement(it.decodeToString()) as? JsonObject }.getOrNull()
+        val message = if (method == "item/tool/call") {
+            frame.payload.jsonObjectOrNull()
+        } else {
+            frame.payload.readBytes(MAX_FILE_CHANGE_MESSAGE_BYTES)?.let { bytes ->
+                runCatching { kotlinx.serialization.json.Json.parseToJsonElement(bytes.decodeToString()) as? JsonObject }.getOrNull()
+            }
         }
         if (message == null) {
             // Preserve the interactive CLI instead of disconnecting when a future
             // approval payload grows beyond the IDE-native preview budget.
             client.write(frame, masked = false)
-            return false
+            return method == "item/tool/call"
         }
         when ((message["method"] as? JsonPrimitive)?.contentOrNull) {
             "item/started" -> (message["params"] as? JsonObject)?.let(approvals::itemStarted)
@@ -183,6 +209,19 @@ internal class WebSocketRelay(
                 } else {
                     approvals.approvalRequested(id, params) { decision -> answer(upstream, id, decision) }
                 }
+                return true
+            }
+            "item/tool/call" -> {
+                val id = message["id"] ?: return true
+                val params = message["params"] as? JsonObject ?: run {
+                    client.write(frame, masked = false)
+                    return true
+                }
+                if ((params["tool"] as? JsonPrimitive)?.contentOrNull != OpenDiffToolProtocol.TOOL_NAME) {
+                    client.write(frame, masked = false)
+                    return true
+                }
+                openDiffs.toolRequested(id, params) { success, detail -> answerDynamic(upstream, id, success, detail) }
                 return true
             }
         }
@@ -199,9 +238,24 @@ internal class WebSocketRelay(
         }
     }
 
+    private fun answerDynamic(
+        upstream: WebSocketFrames,
+        id: kotlinx.serialization.json.JsonElement,
+        success: Boolean,
+        detail: String,
+    ) {
+        val response = dynamicToolResponse(id, success, detail)
+        runCatching {
+            WebSocketFrame(true, 0x1, MemoryRelayPayload(response.toString().encodeToByteArray())).use {
+                upstream.write(it, masked = true)
+            }
+        }
+    }
+
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         approvals.close()
+        openDiffs.close()
         runCatching { server.close() }
         val toClose = synchronized(sockets) { sockets.toList().also { sockets.clear() } }
         toClose.forEach { runCatching { it.close() } }
@@ -438,12 +492,13 @@ internal class WebSocketRelay(
         const val CONNECT_TIMEOUT_MILLIS = 30_000
         const val CLOSE_HANDSHAKE_TIMEOUT_MILLIS = 1_000L
         const val MAX_HEADERS_BYTES = 32 * 1024
-        const val MAX_INTERCEPTED_MESSAGE_BYTES = 4 * 1024 * 1024
+        const val MAX_FILE_CHANGE_MESSAGE_BYTES = 4 * 1024 * 1024
         const val STREAM_BUFFER_BYTES = 64 * 1024
         val INTERCEPTED_METHODS = setOf(
             "item/started",
             "item/completed",
             "item/fileChange/requestApproval",
+            "item/tool/call",
         )
 
         fun acceptKey(key: String): String = Base64.getEncoder().encodeToString(
@@ -452,6 +507,15 @@ internal class WebSocketRelay(
 
         fun constantTimeEquals(actual: String?, expected: String): Boolean = actual != null &&
             MessageDigest.isEqual(actual.encodeToByteArray(), expected.encodeToByteArray())
+
+        private fun disabledOpenDiffCoordinator(): OpenDiffCoordinator = OpenDiffCoordinator(
+            OpenDiffValidator(Path.of(".").toAbsolutePath(), object : OpenDiffSnapshotStore {
+                override fun read(path: Path): String? = null
+                override fun hasUnsavedDocument(path: Path): Boolean = false
+            }),
+            OpenDiffPresenter { _, complete -> complete(OpenDiffCompletion.Reject) },
+            OpenDiffWriter { _, _ -> false },
+        )
     }
 }
 
@@ -462,4 +526,28 @@ internal fun approvalResponse(
     put("jsonrpc", "2.0")
     put("id", id)
     put("result", buildJsonObject { put("decision", if (decision == ApprovalDecision.ACCEPT) "accept" else "decline") })
+}
+
+internal fun dynamicToolResponse(
+    id: kotlinx.serialization.json.JsonElement,
+    success: Boolean,
+    detail: String,
+): JsonObject = buildJsonObject {
+    put("jsonrpc", "2.0")
+    put("id", id)
+    put(
+        "result",
+        buildJsonObject {
+            put("success", success)
+            put(
+                "contentItems",
+                kotlinx.serialization.json.JsonArray(
+                    listOf(buildJsonObject {
+                        put("type", "inputText")
+                        put("text", detail)
+                    }),
+                ),
+            )
+        },
+    )
 }

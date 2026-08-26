@@ -8,12 +8,13 @@
       the current project root, then stage project file and selection references
       from the editor popup. Codex owns authentication, model selection,
       permissions, configuration, and session state in the terminal. Compatible
-      Codex CLI sessions present file-change approvals as read-only native diffs
-      while unsupported sessions continue in the normal terminal UI.
+      Codex CLI sessions present source proposals through an editable native
+      JetBrains diff while unsupported sessions continue in the normal terminal UI.
     ]]></description>
 
     <change-notes><![CDATA[
       <ul>
+        <li>0.4.4: Add the gated openDiff dynamic-tool bridge: source proposals use editable native diffs, reviewer-edited content is committed through JetBrains APIs, and the terminal retains ordinary approvals.</li>
         <li>0.4.3: Stream large Codex plugin-catalog frames through private disk-backed buffers so growing marketplace metadata cannot reset remote terminal sessions.</li>
         <li>0.4.2: Keep terminal command-state probes off IDE action threads and support fragmented WebSocket messages without resetting remote Codex sessions.</li>
         <li>0.4.1: Run native-bridge startup from an isolated private script instead of pasting multiline shell code into the interactive Terminal.</li>

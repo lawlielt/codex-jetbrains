@@ -133,6 +133,28 @@ the production implementation to proceed. The native path must still fall
 back to literal `codex` if its own capability probe or supervised startup
 fails.
 
+## Dynamic `openDiff` gate passing record
+
+The captain-approved dynamic-tool gate passed with `codex-cli 0.149.1` on
+2026-08-26. It starts the normal remote TUI through the authenticated relay,
+injects `initialize.capabilities.experimentalApi`, one strict `openDiff` tool,
+and the source-edit instruction at the remote TUI's `thread/start` boundary.
+It uses the same continuing thread and turn for the complete sequence.
+
+```bash
+python3 -B compatibility/relay_gate.py --disable-apps --mode dynamic \
+  --output compatibility/runtime/dynamic-open-diff-gate
+```
+
+The ignored, metadata-only evidence records that two real `item/tool/call`
+requests arrived with strict arguments; the first returned `success: false`,
+wrote nothing, and was rendered as rejected by the same terminal UI. The
+second callback committed reviewer-edited full content before returning
+`success: true`, then the same turn completed. A controlled shell write under
+the read-only sandbox did not mutate the disposable worktree. The driver does
+not retain prompts, paths, tool arguments, protocol bodies, or credentials in
+this tracked document.
+
 ## Reproduction
 
 Run from the repository root with an authenticated local Codex home:

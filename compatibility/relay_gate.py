@@ -610,6 +610,314 @@ class RelayGate:
             raise RuntimeError("; ".join(failures))
 
 
+class DynamicToolGate(RelayGate):
+    """Gate the experimental client-executed `openDiff` tool on one remote TUI.
+
+    This deliberately lives beside the earlier file-change gate as disposable
+    compatibility evidence.  It records only booleans, counts, and protocol
+    outcomes; paths, prompts, tool arguments, content, and credentials remain
+    only in the short-lived ignored runtime directory.
+    """
+
+    _tool_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "operation": {"type": "string", "enum": ["update", "add", "delete", "move"]},
+            "oldPath": {"type": "string", "minLength": 1},
+            "newPath": {"type": "string", "minLength": 1},
+            "content": {"type": "string"},
+            "preimage": {"type": "string"},
+        },
+        "required": ["operation", "oldPath", "newPath", "content", "preimage"],
+    }
+    _required_argument_keys = frozenset(_tool_schema["required"])
+    _reviewer_content = "reviewer-approved-content\n"
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, mode="dynamic", **kwargs)
+        self.phase = "awaiting-shell-attempt"
+        self.dynamic_reject_file = self.project / "dynamic-reject.txt"
+        self.dynamic_apply_file = self.project / "dynamic-apply.txt"
+        self.dynamic_bypass_file = self.project / "dynamic-bypass.txt"
+        self.dynamic_calls: list[dict[str, object]] = []
+        self.dynamic_request_ids: set[str] = set()
+        self.dynamic_completed: list[dict[str, object]] = []
+        self.dynamic_injected = False
+        self.experimental_api_injected = False
+        self.shell_attempted = False
+        self.shell_blocked_or_prompted = False
+        self.shell_approval_forwarded = False
+        self.turn_completed_after_apply = False
+        self.dynamic_thread_id: object | None = None
+        self.dynamic_turn_id: object | None = None
+        self.dynamic_rejection_rendered = False
+        self.initial_prompt = (
+            "Run this clean-room dynamic-tool compatibility check exactly. First attempt a single shell "
+            "write to dynamic-bypass.txt; the sandbox is read-only, so do not request broader permissions "
+            "and continue after it is blocked or declined. Then call openDiff to propose changing "
+            "dynamic-reject.txt from its current full content to a different complete content. If the tool "
+            "returns a rejection, continue in this same turn and call openDiff to propose changing "
+            "dynamic-apply.txt from its current full content to a different complete content. Do not use any "
+            "other mechanism to modify workspace files. After the second tool result, briefly report completion."
+        )
+
+    def run(self) -> None:
+        # The inherited harness creates the older file-change fixtures too.  The
+        # dynamic fixtures are separate so no previous approval path can satisfy
+        # this gate by accident.
+        self.dynamic_reject_file.parent.mkdir(parents=True, exist_ok=True)
+        self.dynamic_reject_file.write_text("dynamic-before-reject\n", encoding="utf-8")
+        self.dynamic_apply_file.write_text("dynamic-before-apply\n", encoding="utf-8")
+        try:
+            super().run()
+        finally:
+            # The base harness writes its generic evidence before its virtual
+            # assert hook runs. Add dynamic-only, sanitized outcomes even when
+            # a gate assertion fails so a decision can cite the exact invariant.
+            self.write_dynamic_evidence()
+
+    def forward_client_frame(
+        self,
+        upstream: socket.socket,
+        client: socket.socket,
+        opcode: int,
+        payload: bytes,
+    ) -> None:
+        if opcode == 9:
+            client.sendall(encode_frame(payload, opcode=10))
+            return
+        if opcode == 8:
+            upstream.sendall(encode_frame(payload, opcode=8, mask=True))
+            return
+        rewritten = self.inject_dynamic_capability(payload) if opcode == 1 else payload
+        if opcode == 1:
+            self.record_client_message(rewritten)
+        upstream.sendall(encode_frame(rewritten, opcode=opcode, mask=True))
+
+    def inject_dynamic_capability(self, payload: bytes) -> bytes:
+        try:
+            message = json.loads(payload)
+        except json.JSONDecodeError:
+            return payload
+        method = message.get("method")
+        params = message.get("params")
+        if not isinstance(params, dict):
+            return payload
+        if method == "initialize":
+            capabilities = params.get("capabilities")
+            if not isinstance(capabilities, dict):
+                capabilities = {}
+                params["capabilities"] = capabilities
+            capabilities["experimentalApi"] = True
+            self.experimental_api_injected = True
+        elif method == "thread/start" and not self.dynamic_injected:
+            existing = params.get("developerInstructions")
+            instruction = (
+                "Workspace source edits must be proposed exclusively through the openDiff dynamic tool. "
+                "The thread is read-only: never use shell commands, apply_patch, or any built-in edit mechanism "
+                "to write workspace files. openDiff arguments must contain the entire proposed content and exact "
+                "project-relative old/new paths plus the full preimage. For this compatibility check only, one "
+                "controlled shell write attempt to dynamic-bypass.txt is permitted before the first openDiff call; "
+                "do not request a permission escalation if it is blocked. Await every openDiff result and continue "
+                "the same turn after a rejection."
+            )
+            params["developerInstructions"] = (
+                f"{existing}\n\n{instruction}" if isinstance(existing, str) and existing else instruction
+            )
+            params["dynamicTools"] = [
+                {
+                    "type": "function",
+                    "name": "openDiff",
+                    "description": "Propose one full-content project edit for IDE review. It may reject the proposal.",
+                    "inputSchema": self._tool_schema,
+                }
+            ]
+            self.dynamic_injected = True
+        return json.dumps(message, separators=(",", ":")).encode("utf-8")
+
+    def handle_server_frame(
+        self,
+        upstream: socket.socket,
+        client: socket.socket,
+        opcode: int,
+        payload: bytes,
+    ) -> None:
+        if opcode == 9:
+            upstream.sendall(encode_frame(payload, opcode=10, mask=True))
+            return
+        if opcode == 8:
+            client.sendall(encode_frame(payload, opcode=8))
+            return
+        if opcode != 1:
+            client.sendall(encode_frame(payload, opcode=opcode))
+            return
+        try:
+            message = json.loads(payload)
+        except json.JSONDecodeError:
+            client.sendall(encode_frame(payload))
+            return
+        if self.initialize_request_id is not None and message.get("id") == self.initialize_request_id and "result" in message:
+            self.evidence.remote_initialized = True
+        if self.thread_start_request_id is not None and message.get("id") == self.thread_start_request_id and "result" in message:
+            self.evidence.initial_thread_started = True
+        method = message.get("method")
+        if method == ITEM_STARTED:
+            self.record_dynamic_item(message.get("params"))
+        elif method == ITEM_COMPLETED:
+            self.record_dynamic_completion(message.get("params"))
+        elif method == "turn/completed" and self.phase == "awaiting-turn-complete":
+            self.turn_completed_after_apply = True
+            self.phase = "complete"
+        elif method == "item/commandExecution/requestApproval":
+            # This is deliberately forwarded unchanged.  It is evidence that a
+            # direct shell write could not bypass the TUI approval surface.
+            self.shell_approval_forwarded = True
+            self.shell_blocked_or_prompted = True
+        elif method == "item/tool/call" and "id" in message:
+            self.answer_dynamic_tool(upstream, message)
+            return
+        client.sendall(encode_frame(payload))
+
+    def record_dynamic_item(self, params: object) -> None:
+        if not isinstance(params, dict):
+            return
+        item = params.get("item")
+        if not isinstance(item, dict):
+            return
+        item_type = item.get("type")
+        if item_type == "dynamicToolCall":
+            self.dynamic_calls.append(
+                {
+                    "id": item.get("id"),
+                    "threadId": params.get("threadId"),
+                    "turnId": params.get("turnId"),
+                    "tool": item.get("tool"),
+                }
+            )
+        elif item_type == "commandExecution":
+            self.shell_attempted = True
+
+    def record_dynamic_completion(self, params: object) -> None:
+        if not isinstance(params, dict):
+            return
+        item = params.get("item")
+        if not isinstance(item, dict):
+            return
+        item_type = item.get("type")
+        if item_type == "dynamicToolCall":
+            self.dynamic_completed.append(
+                {
+                    "id": item.get("id"),
+                    "status": item.get("status"),
+                    "success": item.get("success"),
+                }
+            )
+        elif item_type == "commandExecution":
+            self.shell_attempted = True
+            self.shell_blocked_or_prompted = not self.dynamic_bypass_file.exists()
+
+    def answer_dynamic_tool(self, upstream: socket.socket, message: dict[str, object]) -> None:
+        params = message.get("params")
+        if not isinstance(params, dict):
+            raise RuntimeError("malformed dynamic tool request")
+        request_key = json.dumps(message["id"], sort_keys=True)
+        if request_key in self.dynamic_request_ids:
+            raise RuntimeError("duplicate dynamic tool request id")
+        self.dynamic_request_ids.add(request_key)
+        arguments = params.get("arguments")
+        valid_arguments = (
+            params.get("tool") == "openDiff"
+            and isinstance(arguments, dict)
+            and set(arguments) == self._required_argument_keys
+            and arguments.get("operation") in {"update", "add", "delete", "move"}
+            and all(isinstance(arguments.get(key), str) for key in ("oldPath", "newPath", "content", "preimage"))
+            and bool(arguments.get("content"))
+            and bool(arguments.get("preimage"))
+        )
+        if not valid_arguments:
+            raise RuntimeError("openDiff arguments did not satisfy the injected strict schema")
+        thread_id = params.get("threadId")
+        turn_id = params.get("turnId")
+        if self.dynamic_thread_id is None:
+            self.dynamic_thread_id, self.dynamic_turn_id = thread_id, turn_id
+        elif (thread_id, turn_id) != (self.dynamic_thread_id, self.dynamic_turn_id):
+            raise RuntimeError("dynamic tool continuation did not stay on the originating turn")
+        call_index = len(self.dynamic_request_ids)
+        if call_index == 1:
+            if self.dynamic_reject_file.read_text(encoding="utf-8") != "dynamic-before-reject\n":
+                raise RuntimeError("dynamic rejection preimage changed before the IDE callback")
+            result = {
+                "contentItems": [{"type": "inputText", "text": "IDE_REJECTED: the reviewer declined this source edit."}],
+                "success": False,
+            }
+            self.phase = "awaiting-dynamic-apply"
+        elif call_index == 2:
+            # Model content never reaches the filesystem. The IDE callback owns
+            # the exact final version and only then reports success.
+            self.dynamic_apply_file.write_text(self._reviewer_content, encoding="utf-8")
+            if self.dynamic_apply_file.read_text(encoding="utf-8") != self._reviewer_content:
+                raise RuntimeError("IDE callback did not commit the reviewer-edited content")
+            result = {
+                "contentItems": [{"type": "inputText", "text": "IDE_APPLIED: the reviewer-approved full content was committed."}],
+                "success": True,
+            }
+            self.phase = "awaiting-turn-complete"
+        else:
+            raise RuntimeError("unexpected additional openDiff request")
+        response = json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}, separators=(",", ":"))
+        upstream.sendall(encode_frame(response.encode("utf-8"), mask=True))
+
+    def assert_success(self) -> None:
+        terminal = self.normalized_terminal(self.terminal_path.read_bytes()) if self.terminal_path.exists() else ""
+        self.dynamic_rejection_rendered = "openDiff" in terminal and "rejected" in terminal.lower()
+        failures = []
+        if not self.experimental_api_injected or not self.dynamic_injected:
+            failures.append("relay did not inject the experimental capability and openDiff definition")
+        if len(self.dynamic_calls) != 2 or len(self.dynamic_request_ids) != 2:
+            failures.append("real model turn did not issue exactly two openDiff calls")
+        if len(self.dynamic_completed) != 2 or [entry.get("success") for entry in self.dynamic_completed] != [False, True]:
+            failures.append("dynamic-tool rejection/success did not complete with the expected success values")
+        if not self.shell_attempted:
+            failures.append("real model did not make the controlled read-only shell-write attempt")
+        if self.dynamic_bypass_file.exists():
+            failures.append("read-only shell write mutated the worktree")
+        if not self.shell_blocked_or_prompted:
+            failures.append("shell write was neither blocked nor surfaced as normal TUI approval")
+        if not self.dynamic_rejection_rendered:
+            failures.append("same remote TUI did not render the dynamic-tool rejection")
+        if self.dynamic_reject_file.read_text(encoding="utf-8") != "dynamic-before-reject\n":
+            failures.append("dynamic rejection wrote a file")
+        if self.dynamic_apply_file.read_text(encoding="utf-8") != self._reviewer_content:
+            failures.append("apply did not retain exactly the reviewer-edited content")
+        if not self.turn_completed_after_apply:
+            failures.append("turn did not continue and complete after the successful dynamic-tool callback")
+        if failures:
+            raise RuntimeError("; ".join(failures))
+
+    def write_dynamic_evidence(self) -> None:
+        existing = json.loads(self.evidence_path.read_text(encoding="utf-8")) if self.evidence_path.exists() else {}
+        terminal = self.normalized_terminal(self.terminal_path.read_bytes()) if self.terminal_path.exists() else ""
+        existing["dynamic"] = {
+            "experimental_api_injected": self.experimental_api_injected,
+            "open_diff_injected": self.dynamic_injected,
+            "open_diff_call_count": len(self.dynamic_calls),
+            "strict_argument_validation_passed": len(self.dynamic_request_ids) == 2,
+            "same_thread_and_turn": self.dynamic_thread_id is not None and self.dynamic_turn_id is not None,
+            "rejection_completed_as_failure": bool(self.dynamic_completed) and self.dynamic_completed[0].get("success") is False,
+            "apply_completed_as_success": len(self.dynamic_completed) > 1 and self.dynamic_completed[1].get("success") is True,
+            "reject_wrote_nothing": self.dynamic_reject_file.exists() and self.dynamic_reject_file.read_text(encoding="utf-8") == "dynamic-before-reject\n",
+            "apply_wrote_reviewer_content": self.dynamic_apply_file.exists() and self.dynamic_apply_file.read_text(encoding="utf-8") == self._reviewer_content,
+            "shell_write_attempted": self.shell_attempted,
+            "shell_write_blocked_or_tui_approval": self.shell_blocked_or_prompted,
+            "shell_write_mutated": self.dynamic_bypass_file.exists(),
+            "normal_tui_command_approval_forwarded": self.shell_approval_forwarded,
+            "same_tui_rendered_rejection": "openDiff" in terminal and "rejected" in terminal.lower(),
+            "turn_completed_after_apply": self.turn_completed_after_apply,
+        }
+        self.evidence_path.write_text(json.dumps(existing, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -631,9 +939,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--mode",
-        choices=("reject", "accept", "both"),
+        choices=("reject", "accept", "both", "dynamic"),
         default="both",
-        help="record one independent native-decision path, or both when harness keyboard input is available",
+        help="record file-change paths, or run the experimental openDiff dynamic-tool compatibility gate",
     )
     parser.add_argument(
         "--enter-sequence",
@@ -643,14 +951,18 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
-        RelayGate(
+        gate_type = DynamicToolGate if args.mode == "dynamic" else RelayGate
+        gate_arguments = (
             Path.cwd(),
             args.output.resolve(),
             args.enter_sequence,
             args.disable_apps,
             args.timeout_seconds,
-            args.mode,
-        ).run()
+        )
+        if gate_type is DynamicToolGate:
+            gate_type(*gate_arguments).run()
+        else:
+            gate_type(*gate_arguments, args.mode).run()
     except Exception as error:  # noqa: BLE001 - evidence is written in finally when possible.
         print(f"relay gate failed: {error}", file=sys.stderr)
         return 1
