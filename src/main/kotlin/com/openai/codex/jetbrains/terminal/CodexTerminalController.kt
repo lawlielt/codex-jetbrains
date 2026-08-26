@@ -36,13 +36,14 @@ internal enum class TerminalCommandState {
 /**
  * Project-scoped state for a dedicated Codex terminal tab.
  *
- * The command deliberately stays as plain `codex`. Resolution, Node startup,
- * authentication, and all interaction belong to the user's JetBrains terminal
- * shell rather than the IDE JVM.
+ * Command construction remains terminal-owned. The optional native bridge
+ * supplies a shell command that probes the installed CLI and falls back to
+ * literal `codex`; executable resolution and interaction never move to the JVM.
  */
 internal class CodexTerminalController(
     private val sessionFactory: CodexTerminalSessionFactory,
     private val nanoTime: () -> Long = System::nanoTime,
+    private val launchCommand: (Path) -> String = { CODEX_COMMAND },
 ) {
     private var current: SessionRecord? = null
 
@@ -90,7 +91,7 @@ internal class CodexTerminalController(
     }
 
     private fun submit(record: SessionRecord) {
-        record.session.sendCommand(CODEX_COMMAND)
+        record.session.sendCommand(launchCommand(record.projectRoot))
         record.commandSubmittedAt = nanoTime()
     }
 

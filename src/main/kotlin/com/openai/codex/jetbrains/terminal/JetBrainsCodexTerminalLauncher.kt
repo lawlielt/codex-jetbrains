@@ -3,6 +3,7 @@ package com.openai.codex.jetbrains.terminal
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.Project
 import com.intellij.terminal.ui.TerminalWidget
+import com.openai.codex.jetbrains.bridge.BridgeSessionBundle
 import org.jetbrains.plugins.terminal.ShellTerminalWidget
 import org.jetbrains.plugins.terminal.TerminalToolWindowManager
 import java.nio.file.Path
@@ -10,7 +11,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Loaded only through the optional Terminal plugin descriptor. */
 class JetBrainsCodexTerminalLauncher(project: Project) : CodexTerminalLauncher, Disposable {
-    private val controller = CodexTerminalController(JetBrainsTerminalSessionFactory(project))
+    private var bridge: BridgeSessionBundle? = null
+    private val controller = CodexTerminalController(
+        JetBrainsTerminalSessionFactory(project),
+        launchCommand = { root -> prepareBridge(project, root) },
+    )
 
     override fun open(projectRoot: Path) {
         controller.open(projectRoot)
@@ -20,7 +25,17 @@ class JetBrainsCodexTerminalLauncher(project: Project) : CodexTerminalLauncher, 
 
     override fun stage(projectRoot: Path, text: String): Boolean = controller.stage(projectRoot, text)
 
-    override fun dispose() = Unit
+    @Synchronized
+    private fun prepareBridge(project: Project, root: Path): String {
+        bridge?.dispose()
+        bridge = runCatching { BridgeSessionBundle.create(project, root) }.getOrNull()
+        return bridge?.launchCommand() ?: CodexTerminalController.CODEX_COMMAND
+    }
+
+    override fun dispose() {
+        bridge?.dispose()
+        bridge = null
+    }
 }
 
 private class JetBrainsTerminalSessionFactory(
