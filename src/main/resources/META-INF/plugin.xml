@@ -14,6 +14,7 @@
 
     <change-notes><![CDATA[
       <ul>
+        <li>0.4.2: Keep terminal command-state probes off IDE action threads and support fragmented WebSocket messages without resetting remote Codex sessions.</li>
         <li>0.4.1: Run native-bridge startup from an isolated private script instead of pasting multiline shell code into the interactive Terminal.</li>
         <li>0.4.0: Add transparent native read-only file-change approval diffs for compatible Codex CLI app-server sessions, with safe terminal fallback.</li>
         <li>0.3.1: Adopt the unique Codex CLI Companion Marketplace name and a publisher-owned plugin ID.</li>

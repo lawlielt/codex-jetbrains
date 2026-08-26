@@ -36,6 +36,8 @@ class WebSocketRelayTest {
                         assertEquals("7", response["id"]?.jsonPrimitive?.content)
                         assertEquals("accept", response["result"]?.jsonObject?.get("decision")?.jsonPrimitive?.content)
                         writeFrame(socket.getOutputStream(), false, """{"jsonrpc":"2.0","id":9,"method":"item/commandExecution/requestApproval","params":{"command":"pwd"}}""".encodeToByteArray())
+                        writeFrame(socket.getOutputStream(), false, byteArrayOf(), opcode = 0x8)
+                        assertEquals(0x8, readTestFrame(socket.getInputStream()).opcode)
                     }
                 }.onFailure { failures += it }
                 upstreamDone.countDown()
@@ -69,10 +71,86 @@ class WebSocketRelayTest {
                 assertEquals("item/started", started["method"]?.jsonPrimitive?.content)
                 val forwarded = Json.parseToJsonElement(readFrame(remote.getInputStream()).decodeToString()).jsonObject
                 assertEquals("item/commandExecution/requestApproval", forwarded["method"]?.jsonPrimitive?.content)
+                assertEquals(0x8, readTestFrame(remote.getInputStream()).opcode)
+                writeFrame(remote.getOutputStream(), true, byteArrayOf(), opcode = 0x8)
             }
             assertTrue("fake app-server did not finish", upstreamDone.await(5, TimeUnit.SECONDS))
             relay.close()
             assertTrue(failures.isEmpty())
+        }
+    }
+
+    @Test
+    fun `reassembles fragmented app-server text before intercepting approval`() {
+        ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { appServer ->
+            val upstreamDone = CountDownLatch(1)
+            val failures = mutableListOf<Throwable>()
+            val relayFailures = mutableListOf<Throwable>()
+            val appThread = Thread {
+                runCatching {
+                    appServer.accept().use { socket ->
+                        val request = readHeaders(socket.getInputStream())
+                        val key = request.headers.getValue("sec-websocket-key")
+                        socket.getOutputStream().write(upgradeResponse(key).encodeToByteArray())
+                        socket.getOutputStream().flush()
+
+                        val started = """{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread","turnId":"turn","item":{"id":"item","type":"fileChange","changes":[{"path":"file.txt","kind":"update","diff":"@@ -1,1 +1,1 @@\n-before\n+after"}]}}}""".encodeToByteArray()
+                        val startedSplit = started.size / 2
+                        writeFrame(socket.getOutputStream(), false, started.copyOfRange(0, startedSplit), fin = false)
+                        writeFrame(socket.getOutputStream(), false, started.copyOfRange(startedSplit, started.size), opcode = 0x0)
+
+                        val approval = """{"jsonrpc":"2.0","id":11,"method":"item/fileChange/requestApproval","params":{"threadId":"thread","turnId":"turn","itemId":"item"}}""".encodeToByteArray()
+                        val approvalSplit = approval.size / 2
+                        writeFrame(socket.getOutputStream(), false, approval.copyOfRange(0, approvalSplit), fin = false)
+                        writeFrame(socket.getOutputStream(), false, approval.copyOfRange(approvalSplit, approval.size), opcode = 0x0)
+
+                        val response = Json.parseToJsonElement(readFrame(socket.getInputStream()).decodeToString()).jsonObject
+                        assertEquals("11", response["id"]?.jsonPrimitive?.content)
+                        assertEquals("accept", response["result"]?.jsonObject?.get("decision")?.jsonPrimitive?.content)
+                        writeFrame(socket.getOutputStream(), false, """{"jsonrpc":"2.0","method":"thread/status/changed","params":{}}""".encodeToByteArray())
+                        writeFrame(socket.getOutputStream(), false, byteArrayOf(), opcode = 0x8)
+                        assertEquals(0x8, readTestFrame(socket.getInputStream()).opcode)
+                    }
+                }.onFailure { failures += it }
+                upstreamDone.countDown()
+            }
+            appThread.start()
+
+            val root = java.nio.file.Path.of("project").toAbsolutePath().normalize()
+            val relay = WebSocketRelay(
+                appServer.localPort,
+                "remote-token",
+                "app-token",
+                FileChangeApprovalCoordinator(
+                    FileChangeValidator(root, object : FileSnapshotStore {
+                        override fun read(path: java.nio.file.Path): String? = if (path == root.resolve("file.txt")) "before\n" else null
+                        override fun hasUnsavedDocument(path: java.nio.file.Path): Boolean = false
+                    }),
+                    NativeDiffPresenter { _, complete -> complete(ApprovalDecision.ACCEPT) },
+                ),
+                java.nio.file.Files.createTempDirectory("relay-fragment-test").resolve("relay-failed"),
+                onClosed = {},
+                failureObserver = { relayFailures += it },
+            )
+            relay.start()
+            Socket("127.0.0.1", relay.endpoint.substringAfterLast(':').toInt()).use { remote ->
+                val key = Base64.getEncoder().encodeToString(ByteArray(16) { it.toByte() })
+                remote.getOutputStream().write(
+                    "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: $key\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer remote-token\r\n\r\n".encodeToByteArray(),
+                )
+                remote.getOutputStream().flush()
+                assertTrue(readHeaders(remote.getInputStream()).startLine.startsWith("HTTP/1.1 101"))
+                val started = Json.parseToJsonElement(readFrame(remote.getInputStream()).decodeToString()).jsonObject
+                assertEquals("item/started", started["method"]?.jsonPrimitive?.content)
+                val status = Json.parseToJsonElement(readFrame(remote.getInputStream()).decodeToString()).jsonObject
+                assertEquals("thread/status/changed", status["method"]?.jsonPrimitive?.content)
+                assertEquals(0x8, readTestFrame(remote.getInputStream()).opcode)
+                writeFrame(remote.getOutputStream(), true, byteArrayOf(), opcode = 0x8)
+            }
+            assertTrue("fake app-server did not finish", upstreamDone.await(5, TimeUnit.SECONDS))
+            relay.close()
+            assertTrue(failures.isEmpty())
+            assertTrue(relayFailures.isEmpty())
         }
     }
 
@@ -126,8 +204,14 @@ class WebSocketRelayTest {
         MessageDigest.getInstance("SHA-1").digest("${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11".encodeToByteArray()),
     )
 
-    private fun writeFrame(output: OutputStream, masked: Boolean, payload: ByteArray) {
-        output.write(0x81)
+    private fun writeFrame(
+        output: OutputStream,
+        masked: Boolean,
+        payload: ByteArray,
+        fin: Boolean = true,
+        opcode: Int = 0x1,
+    ) {
+        output.write((if (fin) 0x80 else 0) or opcode)
         val maskBit = if (masked) 0x80 else 0
         if (payload.size < 126) {
             output.write(maskBit or payload.size)
@@ -144,8 +228,13 @@ class WebSocketRelayTest {
         output.flush()
     }
 
-    private fun readFrame(input: InputStream): ByteArray {
-        check(input.read() and 0x0F == 1)
+    private data class TestFrame(val fin: Boolean, val opcode: Int, val payload: ByteArray)
+
+    private fun readFrame(input: InputStream): ByteArray = readTestFrame(input).payload
+
+    private fun readTestFrame(input: InputStream): TestFrame {
+        val first = input.read()
+        check(first >= 0)
         val lengthFlag = input.read()
         val masked = lengthFlag and 0x80 != 0
         val length = when (val shortLength = lengthFlag and 0x7F) {
@@ -153,9 +242,10 @@ class WebSocketRelayTest {
             else -> shortLength
         }
         val key = if (masked) ByteArray(4).also { input.readNBytes(it, 0, 4) } else null
-        return ByteArray(length).also { bytes ->
+        val payload = ByteArray(length).also { bytes ->
             input.readNBytes(bytes, 0, length)
             if (key != null) bytes.indices.forEach { bytes[it] = (bytes[it].toInt() xor key[it % 4].toInt()).toByte() }
         }
+        return TestFrame(first and 0x80 != 0, first and 0x0F, payload)
     }
 }
