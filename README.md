@@ -2,13 +2,15 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-Codex CLI Companion for JetBrains is an unofficial, community-maintained companion for the real interactive Codex CLI. Click the Codex toolbar icon and the plugin opens or focuses a project-scoped `Codex` tab in JetBrains' built-in Terminal, starts it at the current project root, and submits the plain `codex` command. From an editor, **Send to Codex** stages the current file or selected lines in that running CLI composer without submitting the turn.
+Codex CLI Companion for JetBrains is an unofficial, community-maintained companion for the real interactive Codex CLI. Click the Codex toolbar icon and the plugin opens or focuses one project-scoped `Codex` tab in JetBrains' built-in Terminal at the project root. Login and normal interaction remain in that terminal. From an editor, **Send to Codex** stages the current file or selected lines in the running CLI composer without submitting the turn.
 
 This project is not affiliated with or endorsed by OpenAI or JetBrains.
 
 Author/vendor: **lawlielt** · [lowlielt.liu@gmail.com](mailto:lowlielt.liu@gmail.com)
 
-Authentication, model and reasoning selection, permissions, configuration, session state, and every interactive prompt remain inside the Codex CLI. The plugin has no chat tool window, executable-path setting, login UI, credential handling, approval UI, or app-server process.
+Authentication, model and reasoning selection, permissions, configuration, session state, command approvals, network approvals, MCP approvals, and every normal interactive prompt remain inside the Codex CLI. The plugin has no chat tool window, executable-path setting, login UI, credential store, or manual hook/MCP setup.
+
+On compatible CLI/protocol builds, the same terminal tab transparently runs a shell-supervised local app-server connected through an authenticated loopback relay. The relay injects one session-scoped `openDiff` dynamic tool and developer instructions while keeping the Codex workspace sandbox read-only. Source changes open as a temporary native editor-area tab named **`[Codex] <filename>`**: the current project file is read-only on the Original side, while Proposed is editable. **Apply** commits exactly the reviewer-edited right-hand content through JetBrains write APIs, closes only that review tab, restores the originating source tab, and returns a successful dynamic-tool result; **Reject** or closing that review tab writes nothing and returns a structured rejection to the same Codex turn. The earlier correlated `item/fileChange/requestApproval` bridge remains a compatibility fallback. Command, network, MCP, permission, and unrelated dynamic-tool approvals remain unchanged in the terminal.
 
 ## Requirements
 
@@ -32,9 +34,13 @@ Authentication, model and reasoning selection, permissions, configuration, sessi
 - It supports only files inside the current project and uses forward slashes in project-relative paths.
 - It selects and focuses the existing `Codex` tab, inserts one literal reference followed by a safe separating space, and does not press Enter or append a newline.
 
-Clicking the action again focuses the live project tab instead of launching another Codex process. If Codex has returned to the shell prompt, a later click starts `codex` again in the same tab; closing the tab makes the next click create a fresh one.
+Clicking the action again focuses the live project tab instead of launching another Codex process. If Codex has returned to the shell prompt, a later click starts a new compatible session in the same tab; closing the tab makes the next click create a fresh one.
 
-If the Terminal plugin is unavailable, the action asks you to enable it. If the shell cannot resolve `codex`, install or configure the CLI in that same JetBrains Terminal environment and retry there.
+If the Terminal plugin is unavailable, the action asks you to enable it. If the shell cannot resolve `codex`, install or configure the CLI in that same JetBrains Terminal environment and retry there. If the installed CLI does not expose the required app-server/remote capability, or supervised startup fails, the terminal prints one short non-blocking explanation and cleanly continues with normal literal `codex`; it never falls back to terminal-output parsing.
+
+The native bridge writes its launcher into the same private temporary directory as its capability-token files. The interactive Terminal receives only one quoted command that runs this isolated script, so shell options and multiline parsing never leak into the user's zsh/bash session. The script is removed together with its tokens and app-server logs when the session ends.
+
+The relay keeps small WebSocket payloads in memory and spills larger payloads into short-lived files in that private directory. It scans only the top-level JSON-RPC method while streaming unrelated responses, so growing plugin-marketplace catalogs and dynamic-tool payloads do not require a fixed in-memory frame limit. Only the selected native approval or `openDiff` message is materialized for IDE handling; an oversized legacy file-change preview returns unchanged to the normal terminal approval UI instead of resetting the session.
 
 ## Why the CLI launches inside Terminal
 
@@ -44,9 +50,15 @@ Version 0.1 launched a configured absolute Codex script from the IDE JVM and sta
 - JetBrains terminal shells load the user's shell/NVM environment, while a GUI IDE/JVM may not have NVM's `node` directory on `PATH`.
 - The visible symptom was exit 127 with `env: node: No such file or directory` during validation or app-server startup.
 - The same absolute script was already shown to fail without NVM's bin directory and succeed when that directory was on `PATH`.
-- The corrected path submits exactly `codex` to the JetBrains Terminal shell. The CLI now owns environment resolution and authentication.
+- The corrected path keeps executable resolution and authentication in the JetBrains Terminal shell. The compatible native-diff launch command capability-probes and starts its app-server there too, preserving NVM/Homebrew/user-shell behavior; it has no JVM `ProcessBuilder` path.
 
-`CodexTerminalControllerTest` preserves this boundary through a terminal-only test seam: it verifies the project root, `Codex` tab name, exact command, live-session reuse, relaunch behavior, and literal composer staging without exposing a JVM executable or process-launch API.
+`CodexTerminalControllerTest` preserves this boundary through a terminal-only test seam: it verifies the project root, `Codex` tab name, live-session reuse, relaunch behavior, and literal composer staging without exposing a JVM executable or process-launch API.
+
+## Native approval safety
+
+The relay binds only to loopback and authenticates both its remote-TUI and app-server WebSocket connections with short-lived capability tokens held in private temporary files. Secrets are not placed in command arguments or logs. For `openDiff`, it strictly validates the operation, project-relative paths, full preimage, and full proposed content before opening a diff; Apply re-checks staleness and unsaved documents before committing. Update, add, delete, and move requests are supported. The legacy fallback still correlates `threadId`, `turnId`, `itemId`, and upstream request ID before validating its unified patch.
+
+Paths must remain inside the project root and cannot escape through symlinks. Unknown, malformed, stale, dirty-editor, conflicting, duplicate, late, or disposed-project `openDiff` requests fail closed with a single structured rejection. Closing a native diff is Reject. Pending requests reject on disconnect or project/plugin disposal; the shell trap reaps the app-server when the remote TUI exits.
 
 ## Build, test, and run
 
@@ -59,7 +71,7 @@ Versions are centralized in [`gradle/libs.versions.toml`](gradle/libs.versions.t
 
 `buildPlugin` writes the installable archive to `build/distributions/codex-jetbrains-<version>.zip`.
 
-For a sandbox check, open a project in `runIde`, click the toolbar action, and confirm that one interactive `Codex` tab opens at the project root and runs `codex` once. Select editor lines and invoke **Send to Codex** to confirm the reference appears in the composer without submitting; clear the selection and repeat to confirm a file-only reference. Exit Codex and confirm **Send to Codex** disappears from the editor popup; click the toolbar action to confirm tab reuse and CLI relaunch, then close the terminal tab and click again to confirm recreation.
+For a sandbox check, open a project in `runIde`, click the toolbar action, and confirm that one interactive `Codex` tab opens at the project root. Select editor lines and invoke **Send to Codex** to confirm the reference appears in the composer without submitting; clear the selection and repeat to confirm a file-only reference. On a compatible CLI, request an edit and verify that the native read-only diff's Apply/Reject decision resumes the same terminal turn; use Reject to confirm the terminal prints Codex's authoritative decline. Exit Codex and confirm **Send to Codex** disappears from the editor popup; click the toolbar action to confirm tab reuse and CLI relaunch, then close the terminal tab and click again to confirm recreation.
 
 ## Architecture and clean-room policy
 
@@ -67,6 +79,8 @@ For a sandbox check, open a project in `runIde`, click the toolbar action, and c
 - `actions/SendToCodexAction.kt` and `actions/CodexEditorReference.kt` own editor-popup gating and project-relative reference formatting.
 - `terminal/CodexTerminalController.kt` owns project-scoped reuse and the exact command boundary without depending on Terminal APIs.
 - `terminal/JetBrainsCodexTerminalLauncher.kt` is loaded only through `plugin-terminal.xml` and uses the user's configured JetBrains shell.
+- `bridge/BridgeSessionBundle.kt` owns one short-lived relay/session bundle; `WebSocketRelay.kt`, `OpenDiffInjection.kt`, and `RelayPayload.kt` inject and forward the remote JSON-RPC stream with disk-backed large-payload spooling.
+- `bridge/OpenDiffCoordinator.kt` and `JetBrainsOpenDiffPresenter.kt` validate, display, and commit dynamic-tool source proposals through the built-in Diff editor-tab chain; `FileChangeApprovalCoordinator.kt` remains the read-only `fileChange` fallback.
 
 The captain's screenshots and the installed reference plugin were used only to confirm observable editor-to-Terminal behavior and applicable Platform APIs. No Anthropic code, text, icons, identifiers, bytecode, branding, or assets are included or copied. All implementation code in this repository is original.
 
@@ -74,7 +88,7 @@ The Codex mark is the exact SVG path from the `--startup-logo-mask` embedded at 
 
 ## Contributing
 
-Issues and pull requests are welcome. Keep changes within the terminal-first product boundary and run `./gradlew test buildPlugin verifyPlugin` with JDK 21 before submitting a pull request.
+Issues and pull requests are welcome. Keep changes within the terminal-first product boundary and run `./gradlew test buildPlugin verifyPlugin` with JDK 21 before submitting a pull request. Compatibility evidence and the locally executable Gate 1/Gate 2 probes are in [`compatibility/README.md`](compatibility/README.md).
 
 ## License
 

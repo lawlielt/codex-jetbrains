@@ -17,6 +17,8 @@ repositories {
 }
 
 dependencies {
+    implementation(libs.kotlinx.serialization.json)
+
     intellijPlatform {
         intellijIdeaCommunity(libs.versions.intellij.platform.ide)
         bundledPlugin("org.jetbrains.plugins.terminal")

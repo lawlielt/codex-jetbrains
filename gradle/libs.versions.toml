@@ -6,9 +6,11 @@ kotlin = "2.2.20"
 intellij-platform-gradle = "2.18.1"
 intellij-platform-ide = "2024.2.6"
 junit = "4.13.2"
+kotlinx-serialization-json = "1.7.3"
 
 [libraries]
 junit = { module = "junit:junit", version.ref = "junit" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization-json" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

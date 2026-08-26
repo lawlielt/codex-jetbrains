@@ -24,6 +24,18 @@ class CodexTerminalControllerTest {
     }
 
     @Test
+    fun `submits a shell-owned compatible launch command without JVM discovery`() {
+        val customFactory = FakeSessionFactory()
+        val custom = CodexTerminalController(customFactory, clock::now) { root ->
+            "bridge-launch-for-${root.fileName}"
+        }
+
+        custom.open(Path.of("project"))
+
+        assertEquals(listOf("bridge-launch-for-project"), customFactory.created.single().session.commands)
+    }
+
+    @Test
     fun `repeated activation focuses a live session without duplicate commands`() {
         controller.open(Path.of("project"))
         val session = factory.created.single().session
