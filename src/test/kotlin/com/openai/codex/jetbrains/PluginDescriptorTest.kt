@@ -25,6 +25,7 @@ class PluginDescriptorTest {
         assertTrue(pluginXml.contains("group-id=\"MainToolbarRight\""))
         assertTrue(pluginXml.contains("group-id=\"ToolsMenu\""))
         assertTrue(pluginXml.contains("icon=\"/icons/codex.svg\""))
+        assertTrue(pluginXml.contains("keymap=\"\$default\" first-keystroke=\"shift alt ctrl K\""))
     }
 
     @Test
@@ -33,6 +34,7 @@ class PluginDescriptorTest {
         assertTrue(pluginXml.contains("id=\"com.openai.codex.jetbrains.SendEditorReference\""))
         assertTrue(pluginXml.contains("text=\"Send to Codex\""))
         assertTrue(pluginXml.contains("group-id=\"EditorPopupMenu\""))
+        assertTrue(pluginXml.contains("group-id=\"Floating.CodeToolbar\""))
         assertTrue(pluginXml.contains("icon=\"/icons/codex.svg\""))
         assertTrue(pluginXml.contains("keymap=\"\$default\" first-keystroke=\"alt ctrl K\""))
     }
@@ -48,6 +50,20 @@ class PluginDescriptorTest {
             KeyboardShortcut(defaultKeyStroke, null),
         ) as KeyboardShortcut
         val macKeyStroke = macShortcut.firstKeyStroke
+        assertTrue(macKeyStroke.modifiers and InputEvent.ALT_DOWN_MASK != 0)
+        assertTrue(macKeyStroke.modifiers and InputEvent.META_DOWN_MASK != 0)
+        assertFalse(macKeyStroke.modifiers and InputEvent.CTRL_DOWN_MASK != 0)
+    }
+
+    @Test
+    fun `open shortcut keeps the extra shift modifier on the macOS keymap`() {
+        val defaultKeyStroke = requireNotNull(KeymapUtil.getKeyStroke("shift alt ctrl K"))
+        val macShortcut = MacOSDefaultKeymap.convertShortcutFromParent(
+            KeyboardShortcut(defaultKeyStroke, null),
+        ) as KeyboardShortcut
+        val macKeyStroke = macShortcut.firstKeyStroke
+
+        assertTrue(macKeyStroke.modifiers and InputEvent.SHIFT_DOWN_MASK != 0)
         assertTrue(macKeyStroke.modifiers and InputEvent.ALT_DOWN_MASK != 0)
         assertTrue(macKeyStroke.modifiers and InputEvent.META_DOWN_MASK != 0)
         assertFalse(macKeyStroke.modifiers and InputEvent.CTRL_DOWN_MASK != 0)
@@ -74,6 +90,7 @@ class PluginDescriptorTest {
         assertFalse(pluginXml.contains("SendEditorContext"))
         assertFalse(pluginXml.contains("CodexToolWindowFactory"))
         assertFalse(pluginXml.contains("CodexSettingsConfigurable"))
+        assertFalse(pluginXml.contains("consoleFilterProvider"))
     }
 
     @Test

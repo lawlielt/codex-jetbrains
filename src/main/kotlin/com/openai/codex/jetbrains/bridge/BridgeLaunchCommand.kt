@@ -140,10 +140,12 @@ try {
       -not ((codex --help) -match '--remote-auth-token-env')) { Fallback }
   ${'$'}schemaDir = Join-Path ${'$'}bridgeDir 'protocol-schema'
   & codex app-server generate-json-schema --experimental --out ${'$'}schemaDir | Out-Null
-  if (${ '$' }LASTEXITCODE -ne 0 -or
-      -not (Select-String -Path (Join-Path ${'$'}schemaDir '*') -Pattern '"dynamicTools"' -Recurse -Quiet) -or
-      -not (Select-String -Path (Join-Path ${'$'}schemaDir '*') -Pattern '"experimentalApi"' -Recurse -Quiet) -or
-      -not (Select-String -Path (Join-Path ${'$'}schemaDir '*') -Pattern 'item/tool/call' -Recurse -Quiet)) { Fallback }
+  if (${ '$' }LASTEXITCODE -ne 0) { Fallback }
+  ${'$'}schemaFiles = @(Get-ChildItem -LiteralPath ${'$'}schemaDir -File -Recurse -ErrorAction SilentlyContinue)
+  if (${'$'}schemaFiles.Count -eq 0 -or
+      -not (Select-String -LiteralPath ${'$'}schemaFiles.FullName -Pattern '"dynamicTools"' -Quiet) -or
+      -not (Select-String -LiteralPath ${'$'}schemaFiles.FullName -Pattern '"experimentalApi"' -Quiet) -or
+      -not (Select-String -LiteralPath ${'$'}schemaFiles.FullName -Pattern 'item/tool/call' -Quiet)) { Fallback }
   Remove-Item -LiteralPath ${'$'}schemaDir -Recurse -Force -ErrorAction SilentlyContinue
   ${'$'}server = Start-Process -FilePath codex -ArgumentList @('app-server', '--listen', $appServer, '--ws-auth', 'capability-token', '--ws-token-file', $appToken) -PassThru -RedirectStandardOutput "${'$'}bridgeDir\\app-server.log" -RedirectStandardError "${'$'}bridgeDir\\app-server.err"
   ${'$'}ready = ${'$'}false

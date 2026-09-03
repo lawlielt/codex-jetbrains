@@ -1,5 +1,7 @@
 # Native approval relay compatibility spike
 
+The current CLI 0.153.0 schema, no-model production-relay smoke, one-turn dynamic Reject/Apply gate, and terminal-first bundle evidence are recorded in [`validation-report-2026-09-03.md`](validation-report-2026-09-03.md). That report keeps the remaining JetBrains UI, restart, and live Windows/WSL gates explicitly unproven.
+
 This directory contains the disposable compatibility gate required before a
 native Codex edit-approval bridge can replace the current terminal-only path.
 It is not shipped plugin code.

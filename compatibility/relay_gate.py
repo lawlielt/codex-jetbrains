@@ -403,6 +403,7 @@ class RelayGate:
                         process.kill()
                         process.wait(timeout=10)
             os.close(master_fd)
+            app_token_file.unlink(missing_ok=True)
             shutil.rmtree(self.codex_home, ignore_errors=True)
         self.assert_success()
 

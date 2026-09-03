@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-Codex CLI Companion for JetBrains is an unofficial, community-maintained companion for the real interactive Codex CLI. Click the Codex toolbar icon and the plugin opens or focuses one project-scoped `Codex` tab in JetBrains' built-in Terminal at the project root. Login and normal interaction remain in that terminal. From an editor, **Send to Codex** stages the current file or selected lines in the running CLI composer without submitting the turn.
+Codex CLI Companion for JetBrains is an unofficial, community-maintained companion for the real interactive Codex CLI. Click the Codex toolbar icon and the plugin opens or focuses one project-scoped `Codex` tab in JetBrains' built-in Terminal at the project root. Login and normal interaction remain in that terminal. From an editor, **Send to Codex** stages the current file or selected lines in the running CLI composer without submitting the turn. Existing project paths with line or line-range suffixes are clickable in the dedicated classic Terminal widget.
 
 This project is not affiliated with or endorsed by OpenAI or JetBrains.
 
@@ -23,9 +23,9 @@ On compatible CLI/protocol builds, the same terminal tab transparently runs a sh
 
 1. Install the plugin ZIP from **Settings | Plugins | Install Plugin from Disk**.
 2. Open a local project.
-3. Click the Codex icon in the main toolbar. **Tools | Codex** is the menu fallback.
+3. Click the Codex icon in the main toolbar. **Tools | Codex** is the menu fallback. The default open/focus shortcut is **Option+Command+Shift+K** on macOS and **Ctrl+Alt+Shift+K** on Linux/Windows; JetBrains Keymap settings can override or remove it.
 4. Complete first-run login, or continue an existing authenticated session, in the `Codex` Terminal tab.
-5. In a project file, right-click and choose **Send to Codex**. The shortcut is **Option+Command+K** on macOS and **Ctrl+Alt+K** on Linux/Windows.
+5. In a project file, right-click and choose **Send to Codex**. The same action appears on JetBrains' floating code toolbar when that toolbar is available. The shortcut is **Option+Command+K** on macOS and **Ctrl+Alt+K** on Linux/Windows.
 
 **Send to Codex** requires the project’s `Codex` Terminal tab to be open with the Codex CLI still running. The editor action is absent until that matching session is live. It never opens a terminal or launches another Codex process.
 
@@ -34,13 +34,19 @@ On compatible CLI/protocol builds, the same terminal tab transparently runs a sh
 - It supports only files inside the current project and uses forward slashes in project-relative paths.
 - It selects and focuses the existing `Codex` tab, inserts one literal reference followed by a safe separating space, and does not press Enter or append a newline.
 
+In the dedicated Codex tab, the classic build-242 Terminal turns existing project-contained references such as `src/App.kt:12`, `src/App.kt:12:4`, `src/App.kt:12-18`, and `src/App.kt#L12-L18` into links. A line range is selected after navigation. Backtick- or double-quoted paths may contain spaces. Traversal, missing files, foreign absolute paths, and symlink escapes are ignored. This is attached directly to the one Codex widget, not registered as a global console filter. Build 242 exposes no equivalent per-widget filter on its new block Terminal, so that UI retains ordinary terminal text.
+
 Clicking the action again focuses the live project tab instead of launching another Codex process. If Codex has returned to the shell prompt, a later click starts a new compatible session in the same tab; closing the tab makes the next click create a fresh one.
+
+This reuse guarantee covers the current project-service lifetime. Build 242 persists only generic Terminal tab state (name, shell command, working directory, title flag, and command-history file), with no plugin ownership marker. After plugin reload or IDE restart the plugin therefore does not attach to or terminate a restored tab named `Codex`; doing so could claim an unrelated user session. Close any restored stale tab when convenient, then invoke Codex to create a newly owned integration.
 
 If the Terminal plugin is unavailable, the action asks you to enable it. If the shell cannot resolve `codex`, install or configure the CLI in that same JetBrains Terminal environment and retry there. If the installed CLI does not expose the required app-server/remote capability, or supervised startup fails, the terminal prints one short non-blocking explanation and cleanly continues with normal literal `codex`; it never falls back to terminal-output parsing.
 
 The native bridge writes its launcher into the same private temporary directory as its capability-token files. The interactive Terminal receives only one quoted command that runs this isolated script, so shell options and multiline parsing never leak into the user's zsh/bash session. The script is removed together with its tokens and app-server logs when the session ends.
 
 The relay keeps small WebSocket payloads in memory and spills larger payloads into short-lived files in that private directory. It scans only the top-level JSON-RPC method while streaming unrelated responses, so growing plugin-marketplace catalogs and dynamic-tool payloads do not require a fixed in-memory frame limit. Only the selected native approval or `openDiff` message is materialized for IDE handling; an oversized legacy file-change preview returns unchanged to the normal terminal approval UI instead of resetting the session.
+
+On a Windows-hosted IDE, the supported code path uses one generated `powershell.exe` launcher and Windows-native project/token paths, and expects a Windows Codex CLI resolvable from that PowerShell process. A Windows Terminal profile that starts WSL does not switch the bridge to a WSL-native Codex installation: the submitted command still invokes `powershell.exe`, and the plugin performs no Windows-to-WSL path mapping. A plugin/backend process that actually runs on a non-Windows host follows the POSIX launcher path. Windows and WSL remain deterministic command/path contracts only; this release has no live Windows/WSL runtime claim.
 
 ## Why the CLI launches inside Terminal
 
@@ -71,14 +77,14 @@ Versions are centralized in [`gradle/libs.versions.toml`](gradle/libs.versions.t
 
 `buildPlugin` writes the installable archive to `build/distributions/codex-jetbrains-<version>.zip`.
 
-For a sandbox check, open a project in `runIde`, click the toolbar action, and confirm that one interactive `Codex` tab opens at the project root. Select editor lines and invoke **Send to Codex** to confirm the reference appears in the composer without submitting; clear the selection and repeat to confirm a file-only reference. On a compatible CLI, request an edit and verify that the native read-only diff's Apply/Reject decision resumes the same terminal turn; use Reject to confirm the terminal prints Codex's authoritative decline. Exit Codex and confirm **Send to Codex** disappears from the editor popup; click the toolbar action to confirm tab reuse and CLI relaunch, then close the terminal tab and click again to confirm recreation.
+For a sandbox check, open a project in `runIde`, click the toolbar action or use its shortcut, and confirm that one interactive `Codex` tab opens at the project root. Select editor lines and invoke **Send to Codex** from the editor popup and floating toolbar to confirm the reference appears in the composer without submitting; clear the selection and repeat to confirm a file-only reference. Print an existing project file/line reference and confirm it navigates from the classic Terminal. On a compatible CLI, request an edit and verify that the native read-only diff's Apply/Reject decision resumes the same terminal turn; use Reject to confirm the terminal prints Codex's authoritative decline. Exit Codex and confirm **Send to Codex** disappears from the editor popup; click the toolbar action to confirm tab reuse and CLI relaunch, then close the terminal tab and click again to confirm recreation. The remaining hands-on gates are recorded in [`compatibility/validation-report-2026-09-03.md`](compatibility/validation-report-2026-09-03.md).
 
 ## Architecture and clean-room policy
 
 - `actions/OpenCodexTerminalAction.kt` owns the always-visible toolbar/menu action and the concise missing-Terminal notification.
 - `actions/SendToCodexAction.kt` and `actions/CodexEditorReference.kt` own editor-popup gating and project-relative reference formatting.
 - `terminal/CodexTerminalController.kt` owns project-scoped reuse and the exact command boundary without depending on Terminal APIs.
-- `terminal/JetBrainsCodexTerminalLauncher.kt` is loaded only through `plugin-terminal.xml` and uses the user's configured JetBrains shell.
+- `terminal/JetBrainsCodexTerminalLauncher.kt` is loaded only through `plugin-terminal.xml`, uses the user's configured JetBrains shell, and attaches `CodexTerminalFileFilter.kt` only to its own compatible widget.
 - `bridge/BridgeSessionBundle.kt` owns one short-lived relay/session bundle; `WebSocketRelay.kt`, `OpenDiffInjection.kt`, and `RelayPayload.kt` inject and forward the remote JSON-RPC stream with disk-backed large-payload spooling.
 - `bridge/OpenDiffCoordinator.kt` and `JetBrainsOpenDiffPresenter.kt` validate, display, and commit dynamic-tool source proposals through the built-in Diff editor-tab chain; `FileChangeApprovalCoordinator.kt` remains the read-only `fileChange` fallback.
 

@@ -3,6 +3,7 @@ package com.openai.codex.jetbrains.terminal
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
+import com.intellij.terminal.JBTerminalWidget
 import com.intellij.terminal.ui.TerminalWidget
 import com.intellij.util.concurrency.AppExecutorUtil
 import com.openai.codex.jetbrains.bridge.BridgeSessionBundle
@@ -52,6 +53,11 @@ private class JetBrainsTerminalSessionFactory(
             tabName,
             true,
             false,
+        )
+        // build 242 exposes per-widget filters on the classic terminal only.
+        // A scoped no-op on the block terminal is safer than registering a project-wide console filter.
+        JBTerminalWidget.asJediTermWidget(widget)?.addMessageFilter(
+            CodexTerminalFileFilter(project, workingDirectory),
         )
         return JetBrainsTerminalSession(manager, widget, project)
     }

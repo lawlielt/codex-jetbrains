@@ -54,7 +54,8 @@ class BridgeLaunchCommandTest {
 
     @Test
     fun `powershell launcher installs a script and submits one terminal command`() {
-        val state = Files.createTempDirectory("bridge-launch-test-")
+        val root = Files.createTempDirectory("bridge-launch-test-")
+        val state = Files.createDirectory(root.resolve("state with spaces"))
         try {
             val localSpec = spec.copy(stateDirectory = state)
             val launch = BridgeLaunchCommand.install(localSpec, windows = true)
@@ -66,13 +67,33 @@ class BridgeLaunchCommandTest {
             assertTrue(launch.terminalCommand.endsWith("-File \"${launch.scriptFile}\""))
             assertTrue(script.contains("Start-Process -FilePath codex -ArgumentList @("))
             assertTrue(script.contains("generate-json-schema --experimental"))
+            assertTrue(script.contains("Get-ChildItem -LiteralPath ${'$'}schemaDir -File -Recurse"))
+            assertTrue(script.contains("Select-String -LiteralPath ${'$'}schemaFiles.FullName"))
+            assertFalse(script.contains("Select-String -Path (Join-Path ${'$'}schemaDir '*')"))
             assertTrue(script.contains("try {") && script.contains("} finally {"))
             assertTrue(script.contains("Stop-Process -Id ${'$'}server.Id -Force"))
             assertTrue(script.contains("Remove-Item Env:CODEX_JETBRAINS_RELAY_TOKEN"))
             assertTrue(script.contains("Test-Path -LiteralPath '/private/state/relay-failed'"))
         } finally {
-            state.toFile().deleteRecursively()
+            root.toFile().deleteRecursively()
         }
+    }
+
+    @Test
+    fun `powershell launcher single quotes Windows paths and capability files`() {
+        val windowsSpec = spec.copy(
+            relayTokenFile = Path.of("C:\\Users\\O'Brien\\Codex State\\remote.token"),
+            appServerTokenFile = Path.of("C:\\Users\\O'Brien\\Codex State\\app.token"),
+            relayFailureMarker = Path.of("C:\\Users\\O'Brien\\Codex State\\relay-failed"),
+            stateDirectory = Path.of("C:\\Users\\O'Brien\\Codex State"),
+        )
+
+        val script = BridgeLaunchCommand.powerShell(windowsSpec)
+
+        assertTrue(script.contains("'C:\\Users\\O''Brien\\Codex State\\remote.token'"))
+        assertTrue(script.contains("'C:\\Users\\O''Brien\\Codex State\\app.token'"))
+        assertTrue(script.contains("Test-Path -LiteralPath 'C:\\Users\\O''Brien\\Codex State\\relay-failed'"))
+        assertFalse(script.contains("remote-token-value"))
     }
 
     @Test
